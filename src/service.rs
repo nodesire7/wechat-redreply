@@ -266,6 +266,7 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
         "scheduled-recall",
         "locate-only",
         "virtualized-recall",
+        "fresh-chat-and-recall",
     ]
     .contains(&mode)
     {
@@ -289,7 +290,20 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
         }
     });
     let mut input_before = None;
+    let mut initial_chat_title = None;
     let mut operation_guard = None;
+    let mut input_phases = Vec::new();
+    let snapshot = |phase: &str| {
+        let input = native::input_snapshot();
+        let mut pid = 0;
+        unsafe {
+            windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
+                windows::Win32::Foundation::HWND(input.foreground as *mut _),
+                Some(&mut pid),
+            );
+        }
+        json!({"phase":phase,"foreground":input.foreground,"foreground_pid":pid,"focus":input.focus,"cursor":input.cursor,"clipboard":input.clipboard})
+    };
     let result = (|| -> Result<Value> {
         let deadline = Instant::now() + Duration::from_secs(35);
         while !shared.ready.load(Ordering::SeqCst) {
@@ -303,10 +317,17 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
         }
         let automation = crate::delivery::Automation::new()?;
         input_before = Some(native::input_snapshot());
+        input_phases.push(snapshot("before_preparation"));
         operation_guard = Some(crate::popup::Guard::install(
             native::validate_window(&config.binding()?)?,
             &shared.data,
         )?);
+        if mode == "fresh-chat-and-recall" {
+            let h = native::validate_window(&config.binding()?)?;
+            crate::friends::tab(&automation, h, "通讯录")?;
+            initial_chat_title = Some(automation.title(h).is_ok());
+            input_phases.push(snapshot("after_contacts"));
+        }
         if mode == "locate-only" {
             let args = std::env::args().collect::<Vec<_>>();
             let key = args
@@ -385,10 +406,18 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
             reply: tx,
         };
         input_before = Some(native::input_snapshot());
+        input_phases.push(snapshot("before_send"));
         automation.send(&shared, &job)?;
+        input_phases.push(snapshot("after_send"));
         let sent = started.elapsed().as_secs_f64();
         let h = native::validate_window(&config.binding()?)?;
-        native::capture(h)?.save(shared.data.join(format!("native-test-{mode}.png")))?;
+        // A diagnostic screenshot must not prevent cleanup of a confirmed
+        // test message on a remote desktop with unavailable composition.
+        let _ = native::capture(h).and_then(|image| {
+            image.save(shared.data.join(format!("native-test-{mode}.png")))?;
+            Ok(())
+        });
+        input_phases.push(snapshot("after_capture"));
         if mode == "scheduled-recall" {
             let delay = config.raw["native_test_delay_ms"].as_f64().unwrap_or(5000.);
             crate::actions::schedule(&shared, id, delay)?;
@@ -413,9 +442,10 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
                 }
             }
             automation.recall(&shared, id)?;
+            input_phases.push(snapshot("after_recall"));
         }
         Ok(
-            json!({"mode":mode,"target":name,"group":group,"message_id":id,"send_seconds":sent,"total_seconds":started.elapsed().as_secs_f64(),"database_confirmed":true,"recall_confirmed":mode.ends_with("recall")}),
+            json!({"mode":mode,"target":name,"group":group,"message_id":id,"send_seconds":sent,"total_seconds":started.elapsed().as_secs_f64(),"database_confirmed":true,"recall_confirmed":mode.ends_with("recall"),"initial_chat_title_available":initial_chat_title}),
         )
     })();
     if result.is_err() {
@@ -429,6 +459,7 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
     }
     shared.stop.store(true, Ordering::SeqCst);
     let _ = worker.join();
+    input_phases.push(snapshot("after_database_shutdown"));
     let mut value = match &result {
         Ok(v) => v.clone(),
         Err(e) => json!({"mode":mode,"success":false,"error":format!("{e:#}")}),
@@ -450,6 +481,7 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
         value["cursor_unchanged"] = (before.cursor == after.cursor).into();
         value["clipboard_unchanged"] = (before.clipboard == after.clipboard).into();
     }
+    value["input_phases"] = input_phases.into();
     if let Some(report) = report {
         config::atomic(std::path::Path::new(&report), &value)?;
     }
@@ -500,6 +532,19 @@ pub fn entry() -> Result<()> {
         config::atomic(&path, &Config::default(path.clone()).raw)?;
     }
     let config = Config::read(path)?;
+    if args.iter().any(|s| s == "--diagnose") {
+        let report = crate::diagnostics::collect(&config);
+        let destination = option("--report").map(PathBuf::from).unwrap_or_else(|| {
+            config
+                .path
+                .parent()
+                .unwrap()
+                .join("wechat-diagnostics.json")
+        });
+        config::atomic(&destination, &report)?;
+        println!("诊断完成；报告不含令牌、聊天正文或联系人姓名。");
+        return Ok(());
+    }
     if args.iter().any(|s| s == "--music-backend-probe") {
         let value = crate::music_backend::probe(&config)?;
         if let Some(path) = option("--report") {

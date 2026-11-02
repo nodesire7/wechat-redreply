@@ -38204,7 +38204,7 @@ insights.
 
 ===== wechat-offscreen-guard 0.1.0 | Apache-2.0 =====
 
-===== wechat-redreply 0.1.0 | Apache-2.0 =====
+===== wechat-redreply 0.1.1 | Apache-2.0 =====
 LICENSE
                                  Apache License
                            Version 2.0, January 2004

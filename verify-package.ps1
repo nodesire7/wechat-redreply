@@ -47,6 +47,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed' }
 if ((Get-FileHash -LiteralPath $installedConfig -Algorithm SHA256).Hash -ne $beforeHash) { throw 'Upgrade replaced configuration' }
 if ([System.IO.File]::ReadAllText((Join-Path $dummyData 'preserve.txt')) -ne 'existing-data') { throw 'Upgrade replaced data' }
 Invoke-CheckedExe (Join-Path $installed 'WechatRedReply.exe') '--licenses'
+Invoke-CheckedExe (Join-Path $installed 'WechatRedReply.exe') '--diagnose'
+$diagnostic = Get-Content -LiteralPath (Join-Path $installed 'wechat-diagnostics.json') -Raw
+if ($diagnostic.Contains($installedState.redreply.access_token) -or $diagnostic.Contains('access_token')) { throw 'Diagnostic contains a credential' }
 if (-not (Test-Path -LiteralPath (Join-Path $installed 'THIRD_PARTY_LICENSES.txt'))) { throw 'Embedded licenses unavailable' }
 Write-Host 'PASS: archive hashes, clean state, first run, independent tokens, relocation, install, upgrade preserving data, embedded licenses.'
 Write-Host "Verification files: $sandbox"
