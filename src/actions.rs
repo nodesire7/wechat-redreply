@@ -424,6 +424,11 @@ impl Automation {
                     .map(|n| json!({"type":"node","data":{"nickname":n.name,"content":n.content}}))
                     .collect(),
             );
+            let tracked_sent = if row.create_time > 0 {
+                row.create_time as f64
+            } else {
+                at
+            };
             shared.ledger.lock().unwrap().sent.insert(
                 job.id,
                 Record {
@@ -434,7 +439,7 @@ impl Automation {
                         native_cgi: None,
                         row,
                         runtime_id,
-                        sent_at: at,
+                        sent_at: tracked_sent,
                     }],
                     nodes: Some(node_data),
                     recalled: false,
@@ -851,6 +856,11 @@ impl Automation {
                 }
             }
             if let Some(node) = found {
+                let sent_at = if row.create_time > 0 {
+                    row.create_time as f64
+                } else {
+                    sent_at
+                };
                 return Ok(Tracked {
                     native_cgi: None,
                     row,
@@ -859,6 +869,11 @@ impl Automation {
                 });
             }
             if Instant::now() >= deadline {
+                let sent_at = if row.create_time > 0 {
+                    row.create_time as f64
+                } else {
+                    sent_at
+                };
                 return Ok(Tracked {
                     native_cgi: None,
                     row,
