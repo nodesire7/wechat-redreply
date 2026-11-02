@@ -936,7 +936,7 @@ impl Automation {
                 // Cards without an exposed image child use the acknowledged
                 // outgoing row; never click the blank area outside the bubble.
                 (
-                    rect.right.min(list.right) - ((rect.right - rect.left) / 3).max(120) - origin.x,
+                    rect.right.min(list.right) - 18 - origin.x,
                     (rect.top.max(list.top) + rect.bottom.min(list.bottom)) / 2 - origin.y,
                 )
             };
