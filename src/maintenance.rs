@@ -296,9 +296,10 @@ pub fn capture_settings(c: &Config, output: &std::path::Path) -> Result<()> {
                     windows::Win32::Graphics::Gdi::RDW_INVALIDATE
                         | windows::Win32::Graphics::Gdi::RDW_UPDATENOW
                         | windows::Win32::Graphics::Gdi::RDW_ALLCHILDREN
+                        | windows::Win32::Graphics::Gdi::RDW_ERASE
                         | windows::Win32::Graphics::Gdi::RDW_FRAME,
                 );
-                std::thread::sleep(std::time::Duration::from_millis(180));
+                std::thread::sleep(std::time::Duration::from_millis(320));
                 if args.iter().any(|s| s == "--settings-layout-report") {
                     let mut controls = Vec::new();
                     for id in [

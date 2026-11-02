@@ -1,4 +1,5 @@
-//! Durable output receipts. A recall targets one output and its split parts.
+//! Durable trigger receipts. One trigger owns every output and every physical
+//! WeChat message it produces, so a single recall covers the whole response.
 //! Only unstarted work is replayed automatically after a process interruption.
 use crate::{
     config::{self, Config},
@@ -135,6 +136,13 @@ fn output_batch(account: &str, group: bool, name: &str, id: u64) -> String {
         "output:{account}:{group}:{name}:{id}"
     )))
 }
+/// One durable receipt for every output of the same inbound trigger. Target and
+/// account remain part of the key, so a trigger can never recall another chat.
+fn trigger_batch(account: &str, group: bool, name: &str, source: &str) -> String {
+    hex::encode(Sha256::digest(format!(
+        "trigger:{account}:{group}:{name}:{source}"
+    )))
+}
 pub fn enqueue(shared: &Shared, c: &Config, request: &Value) -> Result<Value> {
     c.binding()?;
     let action = request["action"].as_str().context("Missing action")?;
@@ -195,7 +203,10 @@ pub fn enqueue(shared: &Shared, c: &Config, request: &Value) -> Result<Value> {
         let source = origin
             .clone()
             .unwrap_or_else(|| format!("independent:{id}"));
-        let batch = output_batch(&identity, group, &name, id);
+        let batch = origin
+            .as_deref()
+            .map(|s| trigger_batch(&identity, group, &name, s))
+            .unwrap_or_else(|| output_batch(&identity, group, &name, id));
         tx.execute("INSERT OR IGNORE INTO batches(batch_id,account,name,is_group,source) VALUES(?1,?2,?3,?4,?5)",params![batch,identity,name,group,source])?;
         let state: String = tx.query_row(
             "SELECT status FROM batches WHERE batch_id=?1",
@@ -212,9 +223,14 @@ pub fn enqueue(shared: &Shared, c: &Config, request: &Value) -> Result<Value> {
         }
         tx.execute("INSERT INTO jobs(id,batch_id,account,name,is_group,request,status,enqueued) VALUES(?1,?2,?3,?4,?5,?6,'queued',?7)",params![id,batch,identity,name,group,raw,config::now()])?;
         tx.commit()?;
-        Ok(
-            json!({"message_id":id,"batch_id":batch,"delivery_status":"queued","confirmed_sent":false}),
-        )
+        Ok(json!({
+            "message_id":id,
+            "batch_id":batch,
+            "trigger_id":source,
+            "recall_scope":"trigger",
+            "delivery_status":"queued",
+            "confirmed_sent":false
+        }))
     })?;
     shared.event("runtime",&json!({"text":format!("已持久化入队：{}，消息ID={}；尚未确认微信发出",name,receipt["message_id"]),"event":"durable_queued","receipt":receipt,"session":name}));
     Ok(receipt)
@@ -241,9 +257,7 @@ pub fn workflow(shared: &Shared, c: &Config, p: &Value, open: bool) -> Result<Va
         .context("Unknown or non-whitelisted workflow destination")?;
     let identity = account(shared)?;
     let source = source(p)?.context("回复流程需要明确的来源消息ID")?;
-    let batch = hex::encode(Sha256::digest(format!(
-        "{identity}:{group}:{dest}:{source}"
-    )));
+    let batch = trigger_batch(&identity, group, &name, &source);
     store(shared, |s| {
         let tx = s.db.transaction()?;
         if open {
@@ -257,12 +271,12 @@ pub fn workflow(shared: &Shared, c: &Config, p: &Value, open: bool) -> Result<Va
         Ok(())
     })?;
     shared.log(&format!(
-        "查询流程追踪{}：目标={}，标识={batch}；不改变各输出的撤回计划",
+        "查询流程追踪{}：目标={}，标识={batch}；只影响本次触发的统一撤回范围",
         if open { "开始" } else { "结束" },
         name
     ));
     Ok(
-        json!({"batch_id":batch,"workflow_open":open,"tracking_ttl_seconds":300,"recall_scope":"output_receipt"}),
+        json!({"batch_id":batch,"workflow_open":open,"tracking_ttl_seconds":300,"recall_scope":"trigger"}),
     )
 }
 pub fn friend_status(shared: &Shared, key: &str) -> Result<Option<(String, f64)>> {
@@ -312,7 +326,7 @@ pub fn resume_friends(data: &Path) -> Result<()> {
 }
 pub fn status(shared: &Shared, id: u64) -> Result<Option<Value>> {
     store(shared, |s| {
-        Ok(s.db.query_row("SELECT id,batch_id,name,is_group,status,enqueued,started,finished,error FROM jobs WHERE id=?1",[id],|r|Ok(json!({"message_id":r.get::<_,u64>(0)?,"batch_id":r.get::<_,String>(1)?,"session":r.get::<_,String>(2)?,"group":r.get::<_,bool>(3)?,"delivery_status":r.get::<_,String>(4)?,"enqueued_at":r.get::<_,f64>(5)?,"started_at":r.get::<_,Option<f64>>(6)?,"finished_at":r.get::<_,Option<f64>>(7)?,"error":r.get::<_,String>(8)?}))).optional()?)
+        Ok(s.db.query_row("SELECT j.id,j.batch_id,j.name,j.is_group,j.status,j.enqueued,j.started,j.finished,j.error,b.source FROM jobs j JOIN batches b ON b.batch_id=j.batch_id WHERE j.id=?1",[id],|r|Ok(json!({"message_id":r.get::<_,u64>(0)?,"batch_id":r.get::<_,String>(1)?,"session":r.get::<_,String>(2)?,"group":r.get::<_,bool>(3)?,"delivery_status":r.get::<_,String>(4)?,"enqueued_at":r.get::<_,f64>(5)?,"started_at":r.get::<_,Option<f64>>(6)?,"finished_at":r.get::<_,Option<f64>>(7)?,"error":r.get::<_,String>(8)?,"trigger_id":r.get::<_,String>(9)?,"recall_scope":"trigger"}))).optional()?)
     })
 }
 pub fn recover(shared: &Shared) -> Result<()> {
@@ -369,23 +383,11 @@ pub fn request_recall(shared: &Shared, id: u64, delay: Option<f64>) -> Result<Op
     let Some(item) = status(shared, id)? else {
         return Ok(None);
     };
-    let mut batch = item["batch_id"].as_str().unwrap().to_owned();
+    let batch = item["batch_id"].as_str().unwrap().to_owned();
     let seconds = delay
         .map(|ms| crate::actions::recall_delay(&shared.config.read().unwrap().raw, ms / 1000.));
     store(shared, |s| {
         let tx = s.db.transaction()?;
-        let siblings: i64 = tx.query_row(
-            "SELECT count(*) FROM jobs WHERE batch_id=?1",
-            [&batch],
-            |r| r.get(0),
-        )?;
-        if siblings > 1 {
-            let (account,name,group,source):(String,String,bool,String)=tx.query_row("SELECT j.account,j.name,j.is_group,b.source FROM jobs j JOIN batches b ON b.batch_id=j.batch_id WHERE j.id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
-            let own = output_batch(&account, group, &name, id);
-            tx.execute("INSERT OR IGNORE INTO batches(batch_id,account,name,is_group,source) VALUES(?1,?2,?3,?4,?5)",params![own,account,name,group,source])?;
-            tx.execute("UPDATE jobs SET batch_id=?1 WHERE id=?2", params![own, id])?;
-            batch = own;
-        }
         if let Some(delay) = seconds {
             tx.execute("UPDATE batches SET delay=CASE WHEN delay IS NULL THEN ?1 ELSE min(delay,?1) END WHERE batch_id=?2",params![delay,batch])?;
         } else {
@@ -393,16 +395,16 @@ pub fn request_recall(shared: &Shared, id: u64, delay: Option<f64>) -> Result<Op
                 "UPDATE batches SET recall_requested=1 WHERE batch_id=?1",
                 [&batch],
             )?;
-            tx.execute("UPDATE jobs SET status='cancelled',error='该输出已请求撤回，取消尚未发送内容',finished=?1 WHERE batch_id=?2 AND status IN ('queued','preparing')",params![config::now(),batch])?;
+            tx.execute("UPDATE jobs SET status='cancelled',error='该触发已请求统一撤回，取消尚未发送内容',finished=?1 WHERE batch_id=?2 AND status IN ('queued','preparing')",params![config::now(),batch])?;
         }
         tx.commit()?;
         Ok(())
     })?;
     shared.log(&format!(
-        "输出撤回已登记：消息ID={id}，回执批次={batch}，延迟={seconds:?}秒；仅处理该输出的拆分消息"
+        "触发撤回已登记：消息ID={id}，触发批次={batch}，延迟={seconds:?}秒；整次触发的图片、文字和通知统一撤回"
     ));
     Ok(Some(
-        json!({"message_id":id,"batch_id":batch,"recall_status":"queued","delay_seconds":seconds}),
+        json!({"message_id":id,"batch_id":batch,"recall_status":"queued","delay_seconds":seconds,"recall_scope":"trigger","trigger_id":item["trigger_id"]}),
     ))
 }
 fn batch_ids(shared: &Shared, batch: &str) -> Result<Vec<u64>> {
@@ -686,7 +688,7 @@ fn process_recall_with(
                 "UPDATE batches SET status='recalling',recall_requested=1 WHERE batch_id=?1",
                 [&batch],
             )?;
-            tx.execute("UPDATE jobs SET status='cancelled',error='整批撤回，取消尚未发送内容',finished=?1 WHERE batch_id=?2 AND status IN ('queued','preparing')",params![config::now(),batch])?;
+            tx.execute("UPDATE jobs SET status='cancelled',error='整次触发撤回，取消尚未发送内容',finished=?1 WHERE batch_id=?2 AND status IN ('queued','preparing')",params![config::now(),batch])?;
             tx.commit()?;
             Ok(())
         })?;
@@ -725,7 +727,7 @@ fn process_recall_with(
             Ok(())
         })?;
         shared.log(&format!(
-            "整批撤回完成：批次={batch}，处理{count}个回复，失败{}项 {message}",
+            "整次触发撤回完成：批次={batch}，处理{count}个回复，失败{}项 {message}",
             errors.len()
         ));
         return Ok(true);
@@ -764,8 +766,8 @@ pub fn gui_text(data: &Path, token: &str) -> String {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
         db.busy_timeout(Duration::from_millis(250))?;
-        let mut q=db.prepare("SELECT j.id,j.name,j.status,j.batch_id,j.error,b.status,b.error FROM jobs j JOIN batches b ON b.batch_id=j.batch_id ORDER BY j.id DESC LIMIT 200")?;
-        let mut lines=vec!["已入队表示内容已保存；“发送成功”表示微信已确认发出。\r\n只撤回 RedLang 指定的输出回执；同一输出拆分的图片、文字一起处理，其他输出独立。\r\n".to_owned()];
+        let mut q=db.prepare("SELECT j.id,j.name,j.status,j.batch_id,j.error,b.status,b.error,b.source FROM jobs j JOIN batches b ON b.batch_id=j.batch_id ORDER BY j.id DESC LIMIT 200")?;
+        let mut lines=vec!["已入队表示内容已保存；“发送成功”表示微信已确认发出。\r\n整次触发的所有输出及其拆分的图片、文字、进度和撤回提示共用一个批次，撤回时一起处理。\r\n".to_owned()];
         for row in q.query_map([], |r| {
             Ok((
                 r.get::<_, u64>(0)?,
@@ -775,9 +777,10 @@ pub fn gui_text(data: &Path, token: &str) -> String {
                 r.get::<_, String>(4)?,
                 r.get::<_, String>(5)?,
                 r.get::<_, String>(6)?,
+                r.get::<_, String>(7)?,
             ))
         })? {
-            let (id, name, state, batch, error, recall, recall_error) = row?;
+            let (id, name, state, batch, error, recall, recall_error, trigger) = row?;
             let label = match state.as_str() {
                 "queued" => "待发送",
                 "preparing" => "准备中",
@@ -796,7 +799,7 @@ pub fn gui_text(data: &Path, token: &str) -> String {
                 _ => &recall,
             };
             lines.push(format!(
-                "ID {id}　{name}　{label}\r\n批次 {batch}　{recall}\r\n{error} {recall_error}\r\n"
+                "ID {id}　{name}　{label}\r\n触发 {trigger}　批次 {batch}　{recall}\r\n{error} {recall_error}\r\n"
             ));
         }
         Ok(lines.join("\r\n"))
@@ -823,13 +826,15 @@ mod tests {
         enqueue(s,c,&json!({"action":"send_private_msg","params":{"user_id":config::contact_id(name),"message":[{"type":"reply","data":{"id":source}},{"type":"text","data":{"text":"原文 ccc1 CCC1"}}]}})).unwrap()
     }
     #[test]
-    fn workflow_tracking_does_not_group_outputs_or_hold_explicit_recall() {
+    fn workflow_tracking_uses_one_trigger_batch_and_never_splits_outputs() {
         let d = tempfile::tempdir().unwrap();
         let (c, s) = setup(d.path());
         let p = json!({"user_id":config::contact_id("甲"),"wechat_batch_id":"pipeline"});
         let flow = workflow(&s, &c, &p, true).unwrap();
         let receipt = send(&s, &c, "甲", "pipeline");
-        assert_ne!(flow["batch_id"], receipt["batch_id"]);
+        assert_eq!(flow["batch_id"], receipt["batch_id"]);
+        assert_eq!(receipt["recall_scope"], "trigger");
+        assert_eq!(receipt["trigger_id"], "pipeline");
         let id = receipt["message_id"].as_u64().unwrap();
         let at = config::now() - 40.;
         s.ledger.lock().unwrap().sent.insert(
@@ -874,50 +879,41 @@ mod tests {
         assert!(deadline(&next, batch, 1.).unwrap().unwrap() < config::now());
     }
     #[test]
-    fn explicit_trigger_and_legacy_shared_batch_still_recall_only_one_receipt() {
+    fn explicit_trigger_groups_every_output_and_one_recall_cancels_them_together() {
         let d = tempfile::tempdir().unwrap();
         let (c, s) = setup(d.path());
         let p = json!({"action":"send_private_msg","params":{"user_id":config::contact_id("甲"),"wechat_batch_id":"same","message":"body"}});
         let a = enqueue(&s, &c, &p).unwrap();
         let b = enqueue(&s, &c, &p).unwrap();
-        assert_ne!(a["batch_id"], b["batch_id"]);
+        assert_eq!(a["batch_id"], b["batch_id"]);
         let aid = a["message_id"].as_u64().unwrap();
         let bid = b["message_id"].as_u64().unwrap();
-        store(&s, |db| {
-            db.db.execute(
-                "UPDATE jobs SET batch_id=?1 WHERE id=?2",
-                params![a["batch_id"].as_str().unwrap(), bid],
-            )?;
-            Ok(())
-        })
-        .unwrap();
         request_recall(&s, bid, None).unwrap();
         assert_eq!(
             status(&s, aid).unwrap().unwrap()["delivery_status"],
-            "queued"
+            "cancelled"
         );
         assert_eq!(
             status(&s, bid).unwrap().unwrap()["delivery_status"],
             "cancelled"
         );
-        assert_ne!(
-            status(&s, aid).unwrap().unwrap()["batch_id"],
-            status(&s, bid).unwrap().unwrap()["batch_id"]
-        );
+        assert!(enqueue(&s, &c, &p).is_err());
     }
     #[test]
-    fn recall_only_cancels_the_addressed_output_even_with_identical_trigger() {
+    fn trigger_recall_covers_progress_image_text_and_notice_but_not_other_triggers() {
         let d = tempfile::tempdir().unwrap();
         let (c, s) = setup(d.path());
         let a = send(&s, &c, "甲", "500");
         let b = send(&s, &c, "甲", "500");
+        let c2 = send(&s, &c, "甲", "500");
         let other = send(&s, &c, "甲", "501");
         let other_user = send(&s, &c, "乙", "500");
-        assert_ne!(a["batch_id"], b["batch_id"]);
+        assert_eq!(a["batch_id"], b["batch_id"]);
+        assert_eq!(a["batch_id"], c2["batch_id"]);
         assert_ne!(a["batch_id"], other["batch_id"]);
         assert_ne!(a["batch_id"], other_user["batch_id"]);
         request_recall(&s, b["message_id"].as_u64().unwrap(), None).unwrap();
-        for receipt in [&b] {
+        for receipt in [&a, &b, &c2] {
             assert_eq!(
                 status(&s, receipt["message_id"].as_u64().unwrap())
                     .unwrap()
@@ -926,18 +922,18 @@ mod tests {
             );
         }
         assert_eq!(
-            status(&s, a["message_id"].as_u64().unwrap())
-                .unwrap()
-                .unwrap()["delivery_status"],
-            "queued"
-        );
-        assert_eq!(
             status(&s, other["message_id"].as_u64().unwrap())
                 .unwrap()
                 .unwrap()["delivery_status"],
             "queued"
         );
-        assert!(enqueue(&s,&c,&json!({"action":"send_private_msg","params":{"user_id":config::contact_id("甲"),"wechat_batch_id":"500","message":"later separate output"}})).is_ok());
+        assert_eq!(
+            status(&s, other_user["message_id"].as_u64().unwrap())
+                .unwrap()
+                .unwrap()["delivery_status"],
+            "queued"
+        );
+        assert!(enqueue(&s,&c,&json!({"action":"send_private_msg","params":{"user_id":config::contact_id("甲"),"wechat_batch_id":"500","message":"later same trigger"}})).is_err());
     }
     #[test]
     fn restart_resumes_only_work_that_cannot_have_been_submitted() {
@@ -1021,7 +1017,7 @@ mod tests {
         assert!(gui_text(&s.data, "").contains("发送成功"));
     }
     #[test]
-    fn failed_recall_does_not_touch_other_outputs_of_the_same_trigger() {
+    fn failed_recall_still_attempts_every_output_of_the_trigger() {
         let d = tempfile::tempdir().unwrap();
         let (c, s) = setup(d.path());
         let a = send(&s, &c, "甲", "batch");
@@ -1056,10 +1052,10 @@ mod tests {
             })
             .unwrap()
         );
-        assert_eq!(visited, [ids[0]]);
+        assert_eq!(visited, ids);
         assert_eq!(
             status(&s, ids[1]).unwrap().unwrap()["delivery_status"],
-            "queued"
+            "cancelled"
         );
         assert_eq!(
             status(&s, other["message_id"].as_u64().unwrap())

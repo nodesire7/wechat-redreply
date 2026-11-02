@@ -286,6 +286,17 @@ fn string(value: &Value, key: &str) -> Result<String> {
     }
 }
 
+fn first_string(value: &Value, keys: &[&str]) -> String {
+    for key in keys {
+        if let Some(Value::String(s)) = value.get(*key)
+            && !s.is_empty()
+        {
+            return s.clone();
+        }
+    }
+    String::new()
+}
+
 fn checked_url(raw: String, required: bool) -> Result<Option<String>> {
     if raw.is_empty() && !required {
         return Ok(None);
@@ -443,26 +454,32 @@ pub fn parse_segment(segment: &Value) -> Result<Option<MusicRequest>> {
         Some("music") => {
             let d = &segment["data"];
             let kind = string(d, "type")?;
-            if kind == "custom" {
-                let page = string(d, "url")?;
-                let mut audio = string(d, "audio")?;
+            let custom = kind == "custom"
+                || (kind.is_empty()
+                    && (d.get("audio").is_some()
+                        || d.get("musicUrl").is_some()
+                        || d.get("url").is_some()
+                        || d.get("jumpUrl").is_some()));
+            if custom {
+                let page = first_string(d, &["url", "jumpUrl"]);
+                let mut audio = first_string(d, &["audio", "musicUrl", "voice"]);
                 if audio.is_empty() {
-                    audio = string(d, "voice")?;
+                    audio = first_string(d, &["voice"]);
                 }
                 if audio.is_empty() {
                     bail!("自定义音乐缺少audio地址");
                 }
-                let mut artist = string(d, "content")?;
+                let mut artist = first_string(d, &["content", "singer", "desc"]);
                 if artist.is_empty() {
-                    artist = string(d, "singer")?;
+                    artist = first_string(d, &["singer"]);
                 }
                 let card = MusicCard::new(
                     provider_name(&string(d, "subtype")?).unwrap_or(Provider::Unknown),
-                    string(d, "title")?,
+                    first_string(d, &["title"]),
                     artist,
                     page,
                     audio,
-                    string(d, "image")?,
+                    first_string(d, &["image", "preview", "img"]),
                 )?;
                 return Ok(Some(MusicRequest::Card(card)));
             }
@@ -475,6 +492,22 @@ pub fn parse_segment(segment: &Value) -> Result<Option<MusicRequest>> {
             };
             if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
                 bail!("音乐歌曲ID无效");
+            }
+            // Some platforms attach full metadata alongside the catalog ID. Use
+            // that request, never last session's cached card for the same ID.
+            let title = first_string(d, &["title", "name"]);
+            let page = first_string(d, &["url", "jumpUrl"]);
+            let audio = first_string(d, &["audio", "musicUrl"]);
+            if !title.trim().is_empty() && !page.is_empty() && !audio.is_empty() {
+                let card = MusicCard::new(
+                    provider,
+                    title,
+                    first_string(d, &["content", "singer", "desc", "artist"]),
+                    page,
+                    audio,
+                    first_string(d, &["image", "preview", "img"]),
+                )?;
+                return Ok(Some(MusicRequest::Card(card)));
             }
             Ok(Some(MusicRequest::Catalog { provider, id }))
         }
@@ -663,6 +696,33 @@ mod tests {
         assert_eq!(card.title, "Keep My CASE");
         assert!(!format!("{parsed:?}").contains("SECRETCase"));
         assert!(!format!("{parsed:?}").contains("PrivateCase"));
+    }
+
+    #[test]
+    fn catalog_request_with_current_metadata_never_reuses_a_cached_old_card() {
+        let parsed = parse_segment(&json!({"type":"music","data":{
+            "type":"qq","id":"123",
+            "title":"当前新歌","singer":"当前歌手",
+            "url":"https://y.qq.com/n/ryqq/songDetail/NewSongMid",
+            "audio":"https://audio.example/NewSong.mp3",
+            "image":"https://image.example/NewSong.jpg"
+        }}))
+        .unwrap()
+        .unwrap();
+        let MusicRequest::Card(card) = parsed else {
+            panic!("catalog id with full metadata must be a new card request")
+        };
+        assert_eq!(card.title, "当前新歌");
+        assert_eq!(card.artist, "当前歌手");
+        assert_eq!(
+            card.audio_url.as_deref(),
+            Some("https://audio.example/NewSong.mp3")
+        );
+        assert_eq!(
+            card.track_key(),
+            Some(TrackKey::QqSongMid("NewSongMid".into()))
+        );
+        assert_ne!(card.title, "STAY (Clean)");
     }
 
     #[test]

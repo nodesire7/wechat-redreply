@@ -599,9 +599,9 @@ impl App {
             let v = self.vertical();
             theme::rect(
                 self.side_width() + 28,
-                (170. * v) as i32,
+                (167. * v) as i32,
                 (r.right as f64 / self.scale) as i32 - self.side_width() - 56,
-                ((if self.tls_expanded { 96. } else { 126. }) * v) as i32,
+                ((if self.tls_expanded { 96. } else { 124. }) * v) as i32,
             )
         }
     }
@@ -629,24 +629,28 @@ impl App {
             let v = self.vertical();
             let y = |n: i32| (n as f64 * v) as i32;
             let bottom = h - 152;
-            self.place(631, 53, 20, side - 62, 30);
+            if side < 220 {
+                self.place(631, 42, 20, side - 44, 30);
+            } else {
+                self.place(631, 53, 20, side - 62, 30);
+            }
             for (i, id) in [101, 100, 104, 103, 102].iter().enumerate() {
-                self.place(*id, 12, 48 + i as i32 * 62, side - 24, 54);
+                self.place(*id, 12, 52 + i as i32 * 62, side - 24, 54);
             }
             self.place(STATUS, 22, h - 54, side - 38, 38);
             self.place(600, left, y(36), width, 48);
             self.place(630, left, y(86), width, 28);
-            self.place(NOTICE, left, h - 124, width, 22);
-            self.place(300, left, h - 86, 158, 44);
-            self.place(301, left + 170, h - 86, 132, 44);
-            self.place(303, w - 326, h - 86, 134, 44);
-            self.place(302, w - 180, h - 86, 152, 44);
-            self.place(633, left + 8, y(134), 180, 26);
-            self.place(634, left + 218, y(134), 260, 26);
+            self.place(NOTICE, left, h - 128, width, 24);
+            self.place(300, left, h - 95, 184, 52);
+            self.place(301, left + 196, h - 95, 132, 52);
+            self.place(303, w - 402, h - 95, 176, 52);
+            self.place(302, w - 208, h - 95, 180, 52);
+            self.place(633, left + 29, y(134), 180, 26);
+            self.place(634, left + 234, y(134), 260, 26);
             let card = self.account_rect();
             let cy = card.top;
-            let offset = (width as f64 * 0.104) as i32;
-            let selection = (width as f64 * 0.39) as i32;
+            let offset = (width as f64 * 0.098) as i32;
+            let selection = (width as f64 * 0.386) as i32;
             self.place(
                 620,
                 left + offset,
@@ -669,21 +673,26 @@ impl App {
                 26,
             );
             let select = left + selection;
-            let select_width = width - selection - 268;
+            let compact = width < 1000;
+            let refresh_w = if compact { 120 } else { 164 };
+            let bind_w = if compact { 120 } else { 155 };
+            let gap = 10;
+            let reserve = gap + refresh_w + gap + bind_w + gap + 18;
+            let select_width = (width - selection - reserve).max(150);
             self.place(
                 636,
                 select,
-                cy + y(if self.tls_expanded { 8 } else { 20 }),
+                cy + y(if self.tls_expanded { 0 } else { 12 }),
                 width - selection - 16,
                 26,
             );
-            let operation_y = cy + y(if self.tls_expanded { 42 } else { 52 });
+            let operation_y = cy + y(if self.tls_expanded { 26 } else { 36 });
             self.place(403, select, operation_y, select_width, 230);
             SendMessageW(
                 self.controls[&403],
                 CB_SETITEMHEIGHT,
                 Some(WPARAM(usize::MAX)),
-                Some(LPARAM((y(38) as f64 * self.scale) as isize - 6)),
+                Some(LPARAM((y(42) as f64 * self.scale) as isize - 6)),
             );
             SendMessageW(
                 self.controls[&403],
@@ -691,8 +700,10 @@ impl App {
                 Some(WPARAM((width as f64 * self.scale) as usize)),
                 None,
             );
-            self.place(305, w - 284, operation_y, 120, y(38));
-            self.place(306, w - 154, operation_y, 126, y(38));
+            let refresh_x = select + select_width + 24;
+            let bind_x = refresh_x + refresh_w + 14;
+            self.place(305, refresh_x, operation_y, refresh_w, y(44));
+            self.place(306, bind_x, operation_y, bind_w, y(44));
             let top = if self.tls_expanded { 280 } else { 336 };
             let row = |expanded: i32, collapsed: i32| {
                 if self.tls_expanded {
@@ -1458,7 +1469,7 @@ pub fn run(config: Config) -> Result<()> {
                 WINDOW_EX_STYLE(0)
             },
             class,
-            w!("微信 · 红色问答 — Rust 独立版"),
+            w!("微信 · 红色问答"),
             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -1475,6 +1486,20 @@ pub fn run(config: Config) -> Result<()> {
             h,
             windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE(35),
             &caption as *const _ as _,
+            4,
+        );
+        let text = theme::INK.0;
+        let _ = windows::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+            h,
+            windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE(36),
+            &text as *const _ as _,
+            4,
+        );
+        let border = theme::SIDE.0;
+        let _ = windows::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+            h,
+            windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE(34),
+            &border as *const _ as _,
             4,
         );
         SetPropW(

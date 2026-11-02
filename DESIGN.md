@@ -46,7 +46,7 @@ components:
     textColor: "{colors.working-pane}"
     typography: "{typography.body}"
     rounded: "{rounded.button}"
-    height: "44px"
+    height: "52px"
   button-primary-active:
     backgroundColor: "{colors.primary-pressed}"
     textColor: "{colors.working-pane}"
@@ -56,7 +56,7 @@ components:
     textColor: "{colors.ink}"
     typography: "{typography.body}"
     rounded: "{rounded.button}"
-    height: "44px"
+    height: "52px"
   button-secondary-hover:
     backgroundColor: "{colors.hover-fill}"
     textColor: "{colors.ink}"
@@ -97,7 +97,7 @@ components:
 
 **Creative North Star: "Motrix-style account-first control desk"**
 
-A pale-blue navigation rail and a spacious white working pane make Chinese account and connection settings easy to scan. Restrained indigo actions, charcoal text and small geometric line icons carry the user's pinned Motrix reference into a native Rust / Win32 application delivered as one portable EXE. The surface works in Operate mode: account identity, connection identity and actual running state guide the next action.
+A pale-blue navigation rail and a spacious white working pane make Chinese account and connection settings easy to scan. A narrow pale-blue band crosses above the rounded white pane, as in the approved B composition. Restrained indigo actions, charcoal text and small geometric line icons carry the user's pinned Motrix reference into a native Rust / Win32 application delivered as one portable EXE. The surface works in Operate mode: account identity, connection identity and actual running state guide the next action.
 
 This records the implemented system in `src/gui.rs` and `src/gui_theme.rs`, using `PRODUCT.md` and the account surface brief for durable product constraints. The approved option B composition places the account strip above connection settings and opens on “账号与接入”. It favors saving as part of the requested action. Native Windows chrome, selection, dropdowns, keyboard behavior and editable text remain real controls. There is no browser runtime, shipping UI raster or decorative animation.
 
@@ -123,6 +123,7 @@ The palette combines an icy blue rail, neutral white surfaces and a single blue-
 
 - **Charcoal Ink** (`ink`): headings, field contents and standard action labels.
 - **Slate Secondary** (`muted`): explanations, binding/connection status and footer notice text.
+- **State Dot** (`#A89A8C`): two small painted circles beside the account and RedReply state labels, matching the B comp's neutral status marker.
 - **Icy Navigation Blue** (`sidebar`): the persistent left rail.
 - **Working White** (`working-pane`): main canvas, native text-field backgrounds and flat containers.
 - **Quiet Divider** (`line`): field frames, secondary button outlines, account strip and footer rule.
@@ -155,13 +156,13 @@ The frontmatter sizes are logical pixel heights. A shared `FONT_SIZES = [20, 36,
 
 The native window defaults to (1280 × 900 logical pixels), with a minimum tracked outer size of (1020 × 800). The comp comparison uses an alternate (1536 × 1024) capture; it is review evidence, not a second default. All client layout calculations divide physical bounds by DPI scale before placing scaled controls.
 
-For logical client width `w`, the rail is (192px) below `w = 1100`; at and above that threshold it is `min(round(w / 6), 264)`. The working pane begins at `rail + pane-inset` and retains the same inset at the right. Navigation rows start at (48px), advance by (62px), and have the tokenized row height, with the tokenized rail inset on both sides. Page order is account, scope, queue, logs, advanced.
+For logical client width `w`, the rail is (192px) below `w = 1100`; at and above that threshold it is `min(round(w / 6), 264)`. The working pane begins at `rail + pane-inset` and retains the same inset at the right. A (16px) pale-blue band runs above the white pane, whose top corners use an (18px) rounded clip; this is the B composition and does not move native controls. Navigation rows start at (52px), advance by (62px), and have the tokenized row height, with the tokenized rail inset on both sides. Page order is account, scope, queue, logs, advanced.
 
-The account/connection surface uses `v = clamp((clientHeight - 140) / 674, 0.90, 1.35)` for vertical placement. The account strip starts at `170 × v`; its height is `126 × v` with WSS collapsed and `96 × v` expanded. Its account identity stays to the left of window selection, refresh and binding. The selector keeps native ellipsis and a widened dropdown for long window labels.
+The account/connection surface uses `v = clamp((clientHeight - 140) / 674, 0.90, 1.35)` for vertical placement. The account strip starts at `167 × v`; its height is `124 × v` with WSS collapsed and `96 × v` expanded, and a vertical divider separates identity from selection at 35.5% of the strip width. Its account identity stays to the left of window selection, refresh and binding. The selector keeps native ellipsis and a widened dropdown for long window labels. Only one selection/refresh/bind row is shown; the B comp's separate status dots are painted geometry in the rail-to-pane band.
 
 Connection fields use a three-column first row (listen IP, connection address, port), a two-column second row (robot ID and masked token), and a management-address row with its copy action. The tokenized column gap is shared by these rows and the paired whitelist editors. Nominal single-line field height is `36 × v`; optional WSS fields use `34 × v`. Opening WSS moves the section start from `336 × v` to `280 × v` and tightens row offsets so certificate and key fields fit above the persistent footer.
 
-The footer rule sits (132px) above the client bottom. Notice text sits at `h - 124`; operation buttons sit at `h - 86` with (44px) height. Start/stop remain left; reload/save remain right. Sidebar running status stays near its lower edge. Scope, advanced, logs and queue share this shell and footer; they use their own native content placements rather than inheriting the account form's vertical formula.
+The footer rule sits (116px) above the client bottom, with a thin line that separates it from the connection area. Notice text sits at `h - 128`; operation buttons sit at `h - 95` with (52px) height. Start/stop remain left; reload/save remain right, with the primary save action at the B comp's 180px width. Sidebar running status stays near its lower edge. Scope, advanced, logs and queue share this shell and footer; they use their own native content placements rather than inheriting the account form's vertical formula.
 
 **The Visible Operation Rule.** Keep state, the next available action and the persistent footer readable across the supported desktop sizes, including expanded WSS.
 

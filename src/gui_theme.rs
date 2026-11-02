@@ -7,6 +7,8 @@ pub const BLUE: COLORREF = COLORREF(0x00dd4949);
 pub const SIDE: COLORREF = COLORREF(0x00fbf2e6);
 pub const WHITE: COLORREF = COLORREF(0x00ffffff);
 pub const LINE: COLORREF = COLORREF(0x00e3dcd5);
+pub const DOT: COLORREF = COLORREF(0x00a89a8c);
+pub const PANE_TOP: i32 = 16;
 pub unsafe extern "system" fn button_proc(
     h: HWND,
     msg: u32,
@@ -411,14 +413,24 @@ pub unsafe fn paint(app: &App, dc: HDC) {
     unsafe {
         let mut client = RECT::default();
         let _ = GetClientRect(app.root, &mut client);
-        FillRect(dc, &client, app.paint.white);
         let s = app.scale;
         let side = app.side_width();
-        FillRect(
-            dc,
-            &rect(0, 0, (side as f64 * s) as i32, client.bottom),
-            app.paint.sidebar,
+        FillRect(dc, &client, app.paint.sidebar);
+        // Option B composition: the pale rail continues across a narrow top
+        // band and the white working pane becomes one large rounded surface.
+        // Controls keep their native coordinates; only the surface changes.
+        let pane = CreateRoundRectRgn(
+            (side as f64 * s) as i32,
+            (PANE_TOP as f64 * s) as i32,
+            client.right + 1,
+            client.bottom + 1,
+            (18. * s) as i32,
+            (18. * s) as i32,
         );
+        let _ = SelectClipRgn(dc, Some(pane));
+        FillRect(dc, &client, app.paint.white);
+        let _ = SelectClipRgn(dc, None);
+        let _ = DeleteObject(pane.into());
         icon(
             dc,
             631,
@@ -437,6 +449,21 @@ pub unsafe fn paint(app: &App, dc: HDC) {
                 ((card.bottom - card.top) as f64 * s) as i32,
             );
             rounded(dc, r, WHITE, LINE, (14. * s) as i32);
+            let content_top = r.top + (16. * s) as i32;
+            let content_bottom = r.bottom - (16. * s) as i32;
+            let split = r.left + ((r.right - r.left) as f64 * 0.355) as i32;
+            let pen = CreatePen(PS_SOLID, 1, LINE);
+            let old = SelectObject(dc, pen.into());
+            stroke(dc, &[(split, content_top), (split, content_bottom)]);
+            stroke(
+                dc,
+                &[
+                    (x, r.bottom + (34. * s) as i32),
+                    (client.right - (28. * s) as i32, r.bottom + (34. * s) as i32),
+                ],
+            );
+            SelectObject(dc, old);
+            let _ = DeleteObject(pen.into());
             let av = 56. * app.vertical();
             let iy = r.top + ((r.bottom - r.top) - (av * s) as i32) / 2;
             rounded(
@@ -459,6 +486,19 @@ pub unsafe fn paint(app: &App, dc: HDC) {
                 (av * 0.6 * s) as i32,
                 INK,
             );
+            // State dots sit in the painted surface, before the transparent
+            // native labels. They are geometry, not a raster or font glyph.
+            let brush = CreateSolidBrush(DOT);
+            let dot = (12. * s) as i32;
+            let old = SelectObject(dc, brush.into());
+            let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+            for x in [x + (9. * s) as i32, x + (214. * s) as i32] {
+                let y = (134. * app.vertical() * s) as i32 + (14. * s) as i32;
+                let _ = Ellipse(dc, x, y, x + dot, y + dot);
+            }
+            SelectObject(dc, old_pen);
+            SelectObject(dc, old);
+            let _ = DeleteObject(brush.into());
         }
         for &id in &[
             200, 201, 404, 500, 501, 502, 503, 504, 505, 506, 507, 508, 509, 510,
@@ -487,7 +527,7 @@ pub unsafe fn paint(app: &App, dc: HDC) {
                 rounded(dc, frame, WHITE, LINE, (8. * s) as i32);
             }
         }
-        let y = client.bottom - (132. * s) as i32;
+        let y = client.bottom - (116. * s) as i32;
         let pen = CreatePen(PS_SOLID, 1, LINE);
         let old = SelectObject(dc, pen.into());
         stroke(dc, &[(x, y), (client.right - (28. * s) as i32, y)]);

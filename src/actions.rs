@@ -1159,7 +1159,7 @@ impl Automation {
                 errors.join("；")
             );
         }
-        shared.log("该输出的撤回已确认（微信数据库或原生网络回执）");
+        shared.log("该次触发的撤回已确认（微信数据库或原生网络回执）");
         Ok(())
     }
 }
