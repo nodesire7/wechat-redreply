@@ -20,7 +20,7 @@ The portable Rust EXE includes its helper and runtime components. Windows, a log
 
 ## Capabilities and Constraints
 
-Preserve account binding, private/group whitelists, connection/token/WSS settings, offscreen operation, start/stop, logs, durable queue, native music/merged forwarding, explicit per-output recall limited to120 seconds and friend approvals with chat-only permissions. Unknown send outcomes must not look successful. Never expose tokens or use global clipboard, mouse or foreground focus for automated messaging. Copy buttons act only on user request. Preserve current configuration bytes when deploying a GUI update. Listening and the bound robot WeChat are currently stopped by explicit user request; do not restart them during design work.
+Preserve account binding, private/group whitelists, connection/token/WSS settings, offscreen operation, start/stop, logs, durable queue, native music/merged forwarding, trigger-scoped recall limited to120 seconds and friend approvals with chat-only permissions. Unknown send outcomes must not look successful. Never expose tokens or use global clipboard, mouse or foreground focus for automated messaging. Copy buttons act only on user request. Preserve current configuration bytes when deploying a GUI update. Listening and the bound robot WeChat are currently stopped by explicit user request; do not restart them during design work.
 
 ## Brand Commitments
 
