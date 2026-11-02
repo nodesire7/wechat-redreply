@@ -546,6 +546,15 @@ impl Automation {
         unsafe {
             CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
             Ok(Self {
+                automation: CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)
+                    .or_else(|_| CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER))?,
+            })
+        }
+    }
+    pub fn legacy() -> Result<Self> {
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+            Ok(Self {
                 automation: CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?,
             })
         }
@@ -583,6 +592,20 @@ impl Automation {
         }
     }
     pub(crate) fn select(&self, h: HWND, name: &str, group: bool) -> Result<()> {
+        if self.title(h).is_err() {
+            let _ = self.msaa_wake(h);
+            let mut recovered = false;
+            for label in ["微信", "聊天", "Chats", "WeChat"] {
+                if crate::friends::tab(self, h, label).is_ok() {
+                    recovered = true;
+                    break;
+                }
+            }
+            anyhow::ensure!(
+                recovered,
+                "当前不在聊天页，未找到唯一的微信聊天入口；未激活其他窗口"
+            );
+        }
         if title_matches(&self.title(h).unwrap_or_default(), name, group) {
             return Ok(());
         }
@@ -650,9 +673,6 @@ impl Automation {
         let h = native::validate_window(&binding)?;
         native::offscreen(h)?;
         let _operation_guard = crate::popup::Guard::install(h, &shared.data)?;
-        if self.title(h).is_err() {
-            bail!("离屏微信控件未就绪；未自动激活窗口，请重新检查账号绑定");
-        }
         let root = self.root(h)?;
         if self
             .find(&root, UIA_AutomationIdPropertyId, "chat_input_field")
@@ -689,7 +709,45 @@ impl Automation {
             crate::actions::Operation::Send => {}
         }
         let _guard = crate::popup::Guard::install(h, &shared.data)?;
-        self.select(h, &job.name, job.group)?;
+        let prepared = crate::ui_readiness::prepare(
+            self.title(h),
+            || {
+                // Initialize the accessibility provider by querying it, without
+                // activating the window or changing the user's global input.
+                let _ = self.msaa_wake(h);
+                let until = Instant::now() + Duration::from_secs(2);
+                loop {
+                    let root = self.root(h)?;
+                    if self.descendants(&root)?.len() > 5 {
+                        break;
+                    }
+                    if Instant::now() >= until {
+                        bail!("微信无障碍控件仍未加载");
+                    }
+                    if Instant::now() >= job.deadline {
+                        bail!("任务已过期，未执行会话选择");
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                self.select(h, &job.name, job.group)
+            },
+            || {
+                anyhow::ensure!(
+                    title_matches(&self.title(h)?, &job.name, job.group),
+                    "目标会话核对失败，未发送"
+                );
+                let root = self.root(h)?;
+                self.find(&root, UIA_AutomationIdPropertyId, "chat_input_field")?;
+                Ok(())
+            },
+        );
+        if let Err(error) = prepared {
+            let diagnostic = crate::diagnostics::collect(&c);
+            let _ = config::atomic(&shared.data.join("ui-readiness.json"), &diagnostic);
+            bail!(
+                "微信目标界面未就绪，未发送：{error:#}。诊断已保存到 data/ui-readiness.json；请双击 diagnose.cmd 核对窗口状态和客户端版本"
+            );
+        }
         for (index, part) in job.parts.iter().enumerate() {
             if Instant::now() >= job.deadline
                 || shared.stop.load(Ordering::SeqCst)

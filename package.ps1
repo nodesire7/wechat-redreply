@@ -18,7 +18,7 @@ try {
     foreach ($file in @('WechatRedReply.exe','THIRD_PARTY_LICENSES.txt')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot "dist-build/$file") -Destination (Join-Path $stage $file)
     }
-    foreach ($file in @('README.md','QUICKSTART.md','LICENSE','NOTICE','start.cmd','install.cmd','install.ps1')) {
+    foreach ($file in @('README.md','QUICKSTART.md','LICENSE','NOTICE','start.cmd','install.cmd','install.ps1','diagnose.cmd','diagnose.ps1')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $stage $file)
     }
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'redlang') -Destination $stage -Recurse
@@ -26,6 +26,8 @@ try {
         version = $version
         platform = 'windows-x64'
         verified_wechat = '4.2.0.9'
+        additional_ui_verification = @{ windows='Server 2019 build 17763'; wechat='4.2.0.12'; operations=@('recover chat page','group text','split text and image','recall test receipt') }
+        native_music_verified_wechat = '4.2.0.9'
         configuration_included = $false
         runtime_data_included = $false
         runtime_dependencies = @('Windows x64','Logged-in WeChat','Existing RedReply')

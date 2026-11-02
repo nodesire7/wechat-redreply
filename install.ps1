@@ -11,7 +11,7 @@ New-Item -ItemType Directory -Force -Path $destinationPath | Out-Null
 $targetExe = Join-Path $destinationPath 'WechatRedReply.exe'
 if ($sourceExe -ne $targetExe) {
     # Existing config.json and data are deliberately absent from this file list.
-    foreach ($name in @('WechatRedReply.exe','README.md','QUICKSTART.md','LICENSE','NOTICE','THIRD_PARTY_LICENSES.txt','start.cmd','install.cmd','install.ps1','release-manifest.json')) {
+    foreach ($name in @('WechatRedReply.exe','README.md','QUICKSTART.md','LICENSE','NOTICE','THIRD_PARTY_LICENSES.txt','start.cmd','install.cmd','install.ps1','diagnose.cmd','diagnose.ps1','release-manifest.json')) {
         $source = Join-Path $PSScriptRoot $name
         if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $destinationPath $name) -Force }
     }

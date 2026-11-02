@@ -663,7 +663,7 @@ impl Automation {
             let search = (|| -> Result<IUIAutomationElement> {
                 for node in self.descendants(&root)? {
                     if node.CurrentControlType()? == UIA_EditControlTypeId
-                        && node.CurrentName()?.to_string() == "搜索"
+                        && ["搜索", "Search"].contains(&node.CurrentName()?.to_string().as_str())
                     {
                         return Ok(node);
                     }
@@ -673,13 +673,16 @@ impl Automation {
             let search = match search {
                 Ok(s) => s,
                 Err(_) => {
-                    let button = self.find(&root, UIA_NamePropertyId, "搜索")?;
+                    let button = self
+                        .find(&root, UIA_NamePropertyId, "搜索")
+                        .or_else(|_| self.find(&root, UIA_NamePropertyId, "Search"))?;
                     self.click_native(&button, h)?;
                     std::thread::sleep(Duration::from_millis(150));
                     let mut found = None;
                     for node in self.descendants(&root)? {
                         if node.CurrentControlType()? == UIA_EditControlTypeId
-                            && node.CurrentName()?.to_string() == "搜索"
+                            && ["搜索", "Search"]
+                                .contains(&node.CurrentName()?.to_string().as_str())
                         {
                             found = Some(node);
                             break;
@@ -690,6 +693,10 @@ impl Automation {
             };
             let value: IUIAutomationValuePattern =
                 search.GetCurrentPatternAs(UIA_ValuePatternId)?;
+            if !value.CurrentValue()?.is_empty() {
+                value.SetValue(&BSTR::new())?;
+                std::thread::sleep(Duration::from_millis(40));
+            }
             value.SetValue(&BSTR::from(name))?;
             let until = Instant::now() + Duration::from_millis(1500);
             let mut selected = None;

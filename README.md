@@ -49,4 +49,4 @@
 
 开发构建运行 `build.cmd`，需要 Rust MSVC、Visual Studio C++ Build Tools、Windows SDK 和 CMake（编译加密依赖）。脚本先运行测试，再编译辅助 DLL、内嵌许可证、构建静态 CRT EXE，输出 `dist-build/WechatRedReply.exe`，与正在使用的 `dist` 分开。也可用 `-OutputDirectory` 指定构建目录。依赖锁定于 `Cargo.lock`。运行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\package.ps1` 完成测试、构建和干净打包，输出 ZIP、文件清单和 SHA256；使用明确的文件清单，配置、聊天记录和缓存不会入包。
 
-当前生产微信为4.2.0.9，数据库接收、离屏收发与整批撤回已在该版本验证；原先还验证过4.1.15.13。OneBot11 接入无需重构 RedReply；微信客户端再次升级后的控件或数据库变化需要重新验证。`--licenses` 可导出内嵌的第三方许可证。
+数据库接收、离屏收发与整批撤回已在微信4.2.0.9验证；原先还验证过4.1.15.13。v0.1.1另在Windows Server 2019和微信4.2.0.12实测了通讯录页恢复、群聊文字、图文拆分发送和对应回执的整批撤回；原生音乐后端仍仅接受已验证的4.2.0.9模块签名。Windows 11需在目标机器另行验证。OneBot11 接入无需重构 RedReply；微信升级后的控件或数据库变化需要重新验证。控件异常可双击 `diagnose.cmd` 生成不含令牌和聊天内容的报告，详见 [QUICKSTART.md](QUICKSTART.md)。`--licenses` 可导出内嵌的第三方许可证。
