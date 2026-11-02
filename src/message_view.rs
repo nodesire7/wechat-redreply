@@ -284,6 +284,7 @@ impl Automation {
     ) -> Result<IUIAutomationElement> {
         self.locate_message_inner(shared, h, name, key, false, Some(view))
     }
+    #[allow(dead_code)]
     pub(crate) fn locate_message_header(
         &self,
         shared: &Shared,

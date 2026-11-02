@@ -356,11 +356,20 @@ impl Automation {
                 }
                 staged.push(tracked);
             }
-            let newest = staged.last().context("没有可合并的中转消息")?;
-            let newest_row =
-                self.locate_message_header(shared, h, &staging.name, &newest.row.key())?;
-            self.context(h, &newest_row)?;
-            self.click_native(&self.named_action(h, "多选")?, h)?;
+            let first = staged.first().context("没有可合并的中转消息")?;
+            // The oldest staged message is guaranteed to be painted and well
+            // above the input overlay; opening multi-select from it is stable.
+            std::thread::sleep(Duration::from_millis(450));
+            let first_row = self.locate_message(shared, h, &staging.name, &first.row.key())?;
+            self.context(h, &first_row)?;
+            let multi = match self.named_action(h, "多选") {
+                Ok(node) => node,
+                Err(error) => {
+                    self.dump_action_menu(shared, h, job.id, "多选");
+                    return Err(error);
+                }
+            };
+            self.click_native(&multi, h)?;
             std::thread::sleep(Duration::from_millis(160));
             // Entering native multi-select starts a fresh selection. Clear its
             // initially selected context row before adding exactly our DB keys.
@@ -917,8 +926,41 @@ impl Automation {
                     image_area = area;
                 }
             }
+            let mut text_node = None;
+            let mut text_area = 0i64;
+            for node in self.descendants(row).unwrap_or_default() {
+                if node.CurrentControlType().ok() != Some(UIA_TextControlTypeId) {
+                    continue;
+                }
+                let Ok(name) = node.CurrentName() else {
+                    continue;
+                };
+                if name.is_empty() {
+                    continue;
+                }
+                let Ok(r) = node.CurrentBoundingRectangle() else {
+                    continue;
+                };
+                if r.right <= r.left
+                    || r.bottom <= r.top
+                    || r.top < list.top
+                    || r.bottom > list.bottom
+                {
+                    continue;
+                }
+                let area = (r.right - r.left) as i64 * (r.bottom - r.top) as i64;
+                if text_node.is_none() || area > text_area {
+                    text_node = Some(r);
+                    text_area = area;
+                }
+            }
             let mut sum = 0u64;
             let mut count = 0u64;
+            let mut dark_min_x = 0i32;
+            let mut dark_min_y = 0i32;
+            let mut dark_max_x = 0i32;
+            let mut dark_max_y = 0i32;
+            let mut dark_count = 0u64;
             if image.is_none() {
                 for y in (rect.top.max(list.top) - window.top).max(0)
                     ..(rect.bottom.min(list.bottom) - window.top).min(picture.height() as i32)
@@ -927,33 +969,51 @@ impl Automation {
                         ..(rect.right - window.left).min(picture.width() as i32)
                     {
                         let p = picture.get_pixel(x as _, y as _);
-                        if p[1] as i32 > p[0] as i32 + 18
-                            && p[1] as i32 > p[2] as i32 + 18
-                            && p[1] > 45
-                        {
+                        let (r, g, b) = (p[0] as i32, p[1] as i32, p[2] as i32);
+                        if g > r + 18 && g > b + 18 && g > 45 {
                             sum += x as u64;
                             count += 1;
+                        }
+                        if r < 120 && g < 120 && b < 120 {
+                            if dark_count == 0 {
+                                dark_min_x = x as i32;
+                                dark_min_y = y as i32;
+                                dark_max_x = x as i32;
+                                dark_max_y = y as i32;
+                            } else {
+                                dark_min_x = dark_min_x.min(x as i32);
+                                dark_min_y = dark_min_y.min(y as i32);
+                                dark_max_x = dark_max_x.max(x as i32);
+                                dark_max_y = dark_max_y.max(y as i32);
+                            }
+                            dark_count += 1;
                         }
                     }
                 }
             }
+            let top = rect.top.max(list.top);
+            let bottom = rect.bottom.min(list.bottom);
+            let y = (top + bottom) / 2 - origin.y;
             let (x, y) = if let Some(r) = image {
+                ((r.left + r.right) / 2 - origin.x, y)
+            } else if let Some(r) = text_node {
                 (
                     (r.left + r.right) / 2 - origin.x,
                     (r.top + r.bottom) / 2 - origin.y,
                 )
-            } else if count > 20 {
+            } else if dark_count >= 6 {
+                // The message bubble itself may be white (self-chat staging or
+                // incoming-style); its dark text is the reliable click target.
                 (
-                    (sum / count) as i32 + window.left - origin.x,
-                    (rect.top.max(list.top) + rect.bottom.min(list.bottom)) / 2 - origin.y,
+                    (dark_min_x + dark_max_x) / 2 + window.left - origin.x,
+                    (dark_min_y + dark_max_y) / 2 + window.top - origin.y,
                 )
+            } else if count > 20 {
+                ((sum / count) as i32 + window.left - origin.x, y)
             } else {
                 // Cards without an exposed image child use the acknowledged
                 // outgoing row; never click the blank area outside the bubble.
-                (
-                    rect.right.min(list.right) - 18 - origin.x,
-                    (rect.top.max(list.top) + rect.bottom.min(list.bottom)) / 2 - origin.y,
-                )
+                (rect.right.min(list.right) - 18 - origin.x, y)
             };
             for (msg, key) in [(WM_MOUSEMOVE, 0), (WM_RBUTTONDOWN, 2), (WM_RBUTTONUP, 0)] {
                 PostMessageW(
@@ -967,6 +1027,58 @@ impl Automation {
             std::thread::sleep(Duration::from_millis(120));
             Ok(())
         }
+    }
+    fn dump_action_menu(&self, shared: &Shared, h: HWND, id: u64, wanted: &str) {
+        let mut windows = vec![];
+        for (index, popup) in crate::native::thread_windows(h).into_iter().enumerate() {
+            let Ok(root) = self.root(popup) else { continue };
+            let mut nodes = vec![];
+            if let Ok(all) = self.descendants(&root) {
+                for node in all {
+                    unsafe {
+                        let name = node
+                            .CurrentName()
+                            .map(|n| n.to_string())
+                            .unwrap_or_default();
+                        let class = node
+                            .CurrentClassName()
+                            .map(|c| c.to_string())
+                            .unwrap_or_default();
+                        let ctrl = node.CurrentControlType().map(|c| c.0).unwrap_or_default();
+                        if !name.is_empty() || !class.is_empty() {
+                            nodes.push(json!({"name":name,"class":class,"type":ctrl}));
+                        }
+                    }
+                }
+            }
+            windows.push(json!({"popup":index,"nodes":nodes}));
+        }
+        let list = self
+            .root(h)
+            .ok()
+            .and_then(|r| {
+                self.find(&r, UIA_AutomationIdPropertyId, "chat_message_list")
+                    .ok()
+            })
+            .and_then(|l| unsafe { l.CurrentBoundingRectangle().ok() })
+            .map(|r| vec![r.left, r.top, r.right, r.bottom])
+            .unwrap_or_default();
+        let visible = self
+            .rows(h)
+            .map(|rows| {
+                rows.into_iter()
+                    .filter_map(|node| unsafe {
+                        node.CurrentBoundingRectangle()
+                            .ok()
+                            .map(|r| json!({"rect":[r.left, r.top, r.right, r.bottom]}))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let _ = crate::config::atomic(
+            &shared.data.join(format!("forward-menu-{id}.json")),
+            &json!({"wanted":wanted,"windows":windows,"list":list,"visible":visible}),
+        );
     }
     fn recall_menu_item(&self, h: HWND) -> Result<IUIAutomationElement> {
         for popup in crate::native::thread_windows(h) {
