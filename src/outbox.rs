@@ -170,6 +170,44 @@ fn trigger_batch(account: &str, group: bool, name: &str, source: &str) -> String
         "trigger:{account}:{group}:{name}:{source}"
     )))
 }
+fn auto_recall_delay(message: &Value) -> Option<f64> {
+    let segments = if let Some(text) = message.as_str() {
+        crate::delivery::parse_cq(text)
+    } else {
+        message.as_array()?.clone()
+    };
+    let mut text = String::new();
+    for segment in segments {
+        if segment["type"] == "text"
+            && let Some(value) = segment["data"]["text"].as_str()
+        {
+            text.push_str(value);
+            text.push('\n');
+        }
+    }
+    let re = regex::Regex::new(r"(\d+)\s*(分钟|分|秒)\s*后撤回").ok()?;
+    let mut delay = 0f64;
+    for capture in re.captures_iter(&text) {
+        let amount = capture.get(1)?.as_str().parse::<f64>().ok()?;
+        let seconds = if capture.get(2)?.as_str() == "秒" {
+            amount
+        } else {
+            amount * 60.
+        };
+        // Reserve time for native menu operations before WeChat's 120s limit.
+        let candidate = if seconds >= 60. {
+            seconds - 20.
+        } else {
+            seconds - 5.
+        };
+        delay = delay.max(candidate);
+    }
+    if delay <= 0. && text.contains("施法中") {
+        delay = 25.;
+    }
+    (delay > 0.).then(|| delay.clamp(3., 100.))
+}
+
 pub fn enqueue(shared: &Shared, c: &Config, request: &Value) -> Result<Value> {
     c.binding()?;
     let action = request["action"].as_str().context("Missing action")?;
@@ -210,6 +248,7 @@ pub fn enqueue(shared: &Shared, c: &Config, request: &Value) -> Result<Value> {
     }
     let identity = account(shared)?;
     let origin = source(p)?;
+    let auto_delay = auto_recall_delay(&p["message"]);
     let receipt = store(shared, |s| {
         let tx = s.db.transaction()?;
         let count: i64 = tx.query_row(
@@ -235,13 +274,22 @@ pub fn enqueue(shared: &Shared, c: &Config, request: &Value) -> Result<Value> {
             .map(|s| trigger_batch(&identity, group, &name, s))
             .unwrap_or_else(|| output_batch(&identity, group, &name, id));
         tx.execute("INSERT OR IGNORE INTO batches(batch_id,account,name,is_group,source) VALUES(?1,?2,?3,?4,?5)",params![batch,identity,name,group,source])?;
-        tx.execute("INSERT INTO jobs(id,batch_id,account,name,is_group,request,status,enqueued) VALUES(?1,?2,?3,?4,?5,?6,'queued',?7)",params![id,batch,identity,name,group,raw,config::now()])?;
+        tx.execute("INSERT INTO jobs(id,batch_id,account,name,is_group,request,status,enqueued,recall_delay,recall_status) VALUES(?1,?2,?3,?4,?5,?6,'queued',?7,?8,?9)",params![id,batch,identity,name,group,raw,config::now(),auto_delay,if auto_delay.is_some(){"scheduled"}else{""}])?;
+        if let Some(delay) = auto_delay
+            && delay >= 60.
+        {
+            // The final "N分钟后撤回" marker covers the whole trigger: apply
+            // the same early deadline to outputs that carry no marker of their
+            // own, including @ mentions and progress notices.
+            tx.execute("UPDATE jobs SET recall_delay=CASE WHEN recall_delay IS NULL THEN ?1 ELSE min(recall_delay,?1) END,recall_status=CASE WHEN recall_status='' THEN 'scheduled' ELSE recall_status END WHERE batch_id=?2 AND id<>?3 AND status IN ('queued','sent','uncertain')",params![delay,batch,id])?;
+        }
         tx.commit()?;
         Ok(json!({
             "message_id":id,
             "batch_id":batch,
             "trigger_id":source,
             "recall_scope":"output",
+            "recall_delay":auto_delay,
             "delivery_status":"queued",
             "confirmed_sent":false
         }))
@@ -875,6 +923,19 @@ mod tests {
         );
         crate::actions::save(s).unwrap();
         finish(s, id, "sent", "").unwrap();
+    }
+    #[test]
+    fn withdrawal_notices_schedule_early_recall() {
+        assert_eq!(
+            auto_recall_delay(&json!("该消息2分钟后撤回...")),
+            Some(100.)
+        );
+        assert_eq!(auto_recall_delay(&json!("该消息30秒后撤回...")), Some(25.));
+        assert_eq!(
+            auto_recall_delay(&json!("@阿飞 施法中...请稍候...")),
+            Some(25.)
+        );
+        assert_eq!(auto_recall_delay(&json!("普通回复，没有撤回提示")), None);
     }
     #[test]
     fn workflow_tracking_uses_one_trigger_batch_but_recall_stays_output_scoped() {
