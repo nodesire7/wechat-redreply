@@ -247,6 +247,20 @@ pub struct Database {
 impl Database {
     pub(crate) fn staging(&mut self, c: &Config) -> Result<Peer> {
         let name = c.raw["forward_staging_chat"].as_str().unwrap_or("");
+        if name.trim().is_empty() {
+            let conn = self
+                .files
+                .get_mut("contact/contact.db")
+                .context("contact database missing")?
+                .open()?;
+            let name: String = conn.query_row("SELECT COALESCE(NULLIF(remark,''),NULLIF(nick_name,''),username) FROM contact WHERE username=?1 LIMIT 1", [&self.wxid], |r| r.get(0))
+                .context("未找到本账号自聊；可在高级设置手动填写自己的微信名称")?;
+            return Ok(Peer {
+                name,
+                wxid: self.wxid.clone(),
+                group: false,
+            });
+        }
         let mut temp = c.clone();
         temp.raw["whitelist"] = serde_json::json!([name]);
         temp.raw["blacklist"] = serde_json::json!([]);

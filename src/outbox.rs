@@ -732,7 +732,32 @@ fn process_recall_with(
     }
     Ok(false)
 }
+pub fn gui_summary(data: &Path) -> Result<Value> {
+    let db = Connection::open_with_flags(
+        data.join("outbox.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    db.busy_timeout(Duration::from_millis(100))?;
+    let mut values = serde_json::Map::new();
+    let mut q = db.prepare("SELECT status,count(*) FROM jobs GROUP BY status")?;
+    for item in q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?)))? {
+        let (k, v) = item?;
+        values.insert(k, json!(v));
+    }
+    let paused: Option<String> = db
+        .query_row(
+            "SELECT value FROM friend_control WHERE name='security_pause'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    values.insert("friend_paused_reason".into(), json!(paused));
+    Ok(Value::Object(values))
+}
 pub fn gui_text(data: &Path, token: &str) -> String {
+    if !data.join("outbox.sqlite3").exists() {
+        return "暂无发送任务。\r\n启动监听后，红色问答的回复会显示在这里。已入队、实际发送和撤回结果会分别记录。".into();
+    }
     let read = (|| -> Result<String> {
         let db = Connection::open_with_flags(
             data.join("outbox.sqlite3"),

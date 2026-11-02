@@ -202,18 +202,26 @@ pub fn capture_settings(c: &Config, output: &std::path::Path) -> Result<()> {
                 let page = option("--settings-page");
                 let filter = option("--settings-filter");
                 let minimum = args.iter().any(|s| s == "--settings-minimum");
-                let alter = page.is_some() || filter.is_some() || minimum;
+                let width = option("--settings-width");
+                let height = option("--settings-height");
+                let tls = args.iter().any(|s| s == "--settings-toggle-wss");
+                let alter = page.is_some()
+                    || filter.is_some()
+                    || minimum
+                    || width.is_some()
+                    || height.is_some()
+                    || tls;
                 if alter && GetForegroundWindow() == window {
                     bail!("设置窗口正在前台使用，未改变页面或大小");
                 }
                 let old_page =
-                    (GetPropW(window, w!("WechatRedReplyPage")).0 as usize).clamp(100, 103);
+                    (GetPropW(window, w!("WechatRedReplyPage")).0 as usize).clamp(100, 104);
                 let raw_filter = GetPropW(window, w!("WechatRedReplyLogFilter")).0 as usize;
                 let old_filter = if raw_filter == 0 { 311 } else { raw_filter };
                 let mut old_rect = RECT::default();
                 GetWindowRect(window, &mut old_rect)?;
                 if let Some(page) = page {
-                    if !(100..=103).contains(&page) {
+                    if !(100..=104).contains(&page) {
                         bail!("Invalid settings page");
                     }
                     SendMessageW(
@@ -234,6 +242,9 @@ pub fn capture_settings(c: &Config, output: &std::path::Path) -> Result<()> {
                         Some(LPARAM(0)),
                     );
                 }
+                if tls {
+                    SendMessageW(window, WM_COMMAND, Some(WPARAM(319)), Some(LPARAM(0)));
+                }
                 if minimum {
                     let scale = windows::Win32::UI::HiDpi::GetDpiForWindow(window) as f64 / 96.;
                     SetWindowPos(
@@ -241,8 +252,23 @@ pub fn capture_settings(c: &Config, output: &std::path::Path) -> Result<()> {
                         None,
                         old_rect.left,
                         old_rect.top,
-                        (1000. * scale) as i32,
-                        (740. * scale) as i32,
+                        (1020. * scale) as i32,
+                        (800. * scale) as i32,
+                        SWP_NOACTIVATE | SWP_NOZORDER,
+                    )?;
+                }
+                if let (Some(width), Some(height)) = (width, height) {
+                    if !(1020..=2000).contains(&width) || !(800..=1400).contains(&height) {
+                        bail!("Capture dimensions out of supported range");
+                    }
+                    let scale = windows::Win32::UI::HiDpi::GetDpiForWindow(window) as f64 / 96.;
+                    SetWindowPos(
+                        window,
+                        None,
+                        old_rect.left,
+                        old_rect.top,
+                        (width as f64 * scale) as i32,
+                        (height as f64 * scale) as i32,
                         SWP_NOACTIVATE | SWP_NOZORDER,
                     )?;
                 }
@@ -269,6 +295,9 @@ pub fn capture_settings(c: &Config, output: &std::path::Path) -> Result<()> {
                     Ok(())
                 });
                 if alter {
+                    if tls {
+                        SendMessageW(window, WM_COMMAND, Some(WPARAM(319)), Some(LPARAM(0)));
+                    }
                     SendMessageW(window, WM_COMMAND, Some(WPARAM(old_page)), Some(LPARAM(0)));
                     if old_filter != 0 {
                         SendMessageW(
@@ -278,7 +307,7 @@ pub fn capture_settings(c: &Config, output: &std::path::Path) -> Result<()> {
                             Some(LPARAM(0)),
                         );
                     }
-                    if minimum {
+                    if minimum || width.is_some() || height.is_some() {
                         let _ = SetWindowPos(
                             window,
                             None,

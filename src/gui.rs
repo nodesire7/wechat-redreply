@@ -1,4 +1,6 @@
 //! Native Windows settings, sharing one EXE with the background listener.
+#[path = "gui_theme.rs"]
+mod theme;
 use crate::{
     config::{self, Config},
     native,
@@ -18,7 +20,11 @@ use windows::{
         Graphics::Gdi::*,
         System::LibraryLoader::GetModuleHandleW,
         UI::{
-            Controls::*, HiDpi::*, Input::KeyboardAndMouse::EnableWindow, WindowsAndMessaging::*,
+            Controls::*,
+            HiDpi::*,
+            Input::KeyboardAndMouse::EnableWindow,
+            Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+            WindowsAndMessaging::*,
         },
     },
     core::{PCWSTR, w},
@@ -39,6 +45,10 @@ struct App {
     root: HWND,
     font: HFONT,
     heading: HFONT,
+    section: HFONT,
+    small: HFONT,
+    paint: theme::Paint,
+    tls_expanded: bool,
     windows: Vec<native::Window>,
     dirty: bool,
     loading: bool,
@@ -61,11 +71,7 @@ impl App {
         unsafe {
             let s = config::wide(text);
             let h = CreateWindowExW(
-                if class == w!("EDIT") {
-                    WS_EX_CLIENTEDGE
-                } else {
-                    WINDOW_EX_STYLE(0)
-                },
+                WINDOW_EX_STYLE(0),
                 class,
                 PCWSTR(s.as_ptr()),
                 WS_CHILD | WS_VISIBLE | style,
@@ -86,6 +92,17 @@ impl App {
                 Some(LPARAM(1)),
             );
             self.controls.insert(id, h);
+            if class == w!("BUTTON") && id != 511 {
+                let _ = SetWindowSubclass(h, Some(theme::button_proc), 1, 0);
+            }
+            if class == w!("EDIT") {
+                SendMessageW(
+                    h,
+                    EM_SETMARGINS,
+                    Some(WPARAM(EC_LEFTMARGIN as usize | EC_RIGHTMARGIN as usize)),
+                    Some(LPARAM(1 | (1 << 16))),
+                );
+            }
             if let Some(p) = page {
                 self.pages.entry(p).or_default().push(id);
             }
@@ -96,7 +113,15 @@ impl App {
         unsafe { self.add(id, w!("STATIC"), text, WINDOW_STYLE(0), page) }
     }
     unsafe fn button(&mut self, id: i32, text: &str, page: Option<i32>) -> Result<()> {
-        unsafe { self.add(id, w!("BUTTON"), text, WS_TABSTOP, page) }
+        unsafe {
+            self.add(
+                id,
+                w!("BUTTON"),
+                text,
+                WS_TABSTOP | WINDOW_STYLE(BS_OWNERDRAW as u32),
+                page,
+            )
+        }
     }
     unsafe fn edit(&mut self, id: i32, multi: bool, page: Option<i32>) -> Result<()> {
         unsafe {
@@ -131,7 +156,14 @@ impl App {
     }
     unsafe fn init(&mut self) -> Result<()> {
         unsafe {
-            self.label(600, "微信 · 红色问答　Rust 独立版", None)?;
+            self.label(600, "账号与接入", None)?;
+            self.label(630, "绑定微信，并连接你的红色问答", None)?;
+            self.label(631, "微信 · 红色问答", None)?;
+            self.label(633, "微信 未绑定", Some(101))?;
+            self.label(634, "RedReply 未连接", Some(101))?;
+            self.label(632, "RedReply 连接", Some(101))?;
+            self.label(635, "仅绑定所选账号", Some(101))?;
+            self.label(636, "选择已登录的微信窗口", Some(101))?;
             SendMessageW(
                 self.controls[&600],
                 WM_SETFONT,
@@ -143,9 +175,10 @@ impl App {
             self.button(301, "停止监听", None)?;
             for (id, text) in [
                 (100, "接管范围"),
-                (101, "RedReply 连接"),
-                (102, "微信账号"),
+                (101, "账号与接入"),
+                (102, "高级设置"),
                 (103, "日志与对话"),
+                (104, "发送队列"),
             ] {
                 self.button(id, text, None)?;
             }
@@ -187,9 +220,10 @@ impl App {
                 (506, "WSS 证书（可选）"),
                 (507, "WSS 私钥（可选）"),
             ] {
-                self.label(id + 200, &format!("{label}："), Some(101))?;
+                self.label(id + 200, label, Some(101))?;
                 self.edit(id, false, Some(101))?;
             }
+            self.button(319, "WSS 证书与私钥（可选）", Some(101))?;
             SendMessageW(
                 self.controls[&503],
                 EM_SETPASSWORDCHAR,
@@ -197,27 +231,30 @@ impl App {
                 None,
             );
             self.button(307, "显示令牌", Some(101))?;
-            self.button(304, "复制完整 OneBot 接入地址", Some(101))?;
-            self.label(
-                620,
-                "明确绑定一个已登录微信窗口；不会自动选择其他账号。",
-                Some(102),
-            )?;
+            self.button(304, "复制 OneBot 地址", Some(101))?;
+            self.label(620, "微信账号", Some(101))?;
             self.add(
                 403,
                 w!("COMBOBOX"),
                 "",
                 WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
-                Some(102),
+                Some(101),
             )?;
-            self.button(305, "刷新窗口", Some(102))?;
-            self.button(306, "绑定此账号", Some(102))?;
-            self.label(402, "尚未绑定", Some(102))?;
+            self.button(305, "刷新窗口", Some(101))?;
+            self.button(306, "绑定账号", Some(101))?;
+            self.label(402, "未绑定", Some(101))?;
             self.label(621, "接收方式：数据库增量监听（Rust 原生）", Some(102))?;
             self.label(622, "数据库查询间隔（秒）：", Some(102))?;
             self.edit(508, false, Some(102))?;
             self.label(625, "合并转发中转自聊：", Some(102))?;
             self.edit(510, false, Some(102))?;
+            let cue = config::wide("自动识别当前账号，留空即可");
+            SendMessageW(
+                self.controls[&510],
+                EM_SETCUEBANNER,
+                Some(WPARAM(0)),
+                Some(LPARAM(cue.as_ptr() as isize)),
+            );
             self.label(626, "撤回上限（秒，最多120）：", Some(102))?;
             self.edit(509, false, Some(102))?;
             self.add(
@@ -257,10 +294,28 @@ impl App {
             );
             self.fill();
             self.refresh();
+            for id in [620, 632] {
+                SendMessageW(
+                    self.controls[&id],
+                    WM_SETFONT,
+                    Some(WPARAM(self.section.0 as usize)),
+                    Some(LPARAM(1)),
+                );
+            }
+            for id in [
+                STATUS, NOTICE, 630, 633, 634, 635, 636, 402, 612, 613, 614, 623, 624, 627, 628,
+            ] {
+                SendMessageW(
+                    self.controls[&id],
+                    WM_SETFONT,
+                    Some(WPARAM(self.small.0 as usize)),
+                    Some(LPARAM(1)),
+                );
+            }
             self.show(if std::env::args().any(|s| s == "--log-page") {
                 103
             } else {
-                100
+                101
             });
             SetTimer(Some(self.root), 1, 1000, None);
             self.status();
@@ -343,8 +398,14 @@ impl App {
                 &self
                     .config
                     .binding()
-                    .map(|b| format!("当前绑定：PID {}　窗口 {}", b.pid, b.hwnd))
-                    .unwrap_or_else(|_| "尚未绑定，请选择窗口后绑定".to_owned()),
+                    .map(|b| {
+                        if native::validate_window(&b).is_ok() {
+                            format!("已绑定 · PID {}", b.pid)
+                        } else {
+                            "需要重新绑定".into()
+                        }
+                    })
+                    .unwrap_or_else(|_| "未绑定".to_owned()),
             );
             self.put(
                 613,
@@ -422,11 +483,7 @@ impl App {
                 bail!("撤回上限必须是有效数字");
             }
             c.raw["recall_limit_seconds"] = json!(limit.clamp(1., 120.));
-            let staging = self.get(510).trim().to_owned();
-            if staging.is_empty() {
-                bail!("请填写本账号的自聊名称");
-            }
-            c.raw["forward_staging_chat"] = staging.into();
+            c.raw["forward_staging_chat"] = self.get(510).trim().into();
             c.raw["friend_requests_auto_accept"] = json!(
                 SendMessageW(self.controls[&511], BM_GETCHECK, None, None).0
                     == BST_CHECKED.0 as isize
@@ -454,6 +511,38 @@ impl App {
                     );
                 }
             }
+            if page == 104 {
+                for id in [404, 628] {
+                    let _ = ShowWindow(self.controls[&id], SW_SHOW);
+                }
+                self.log_filter = 318;
+            } else if page == 103 && self.log_filter == 318 {
+                self.log_filter = 311;
+            }
+            self.put(
+                600,
+                match page {
+                    100 => "接管范围",
+                    101 => "账号与接入",
+                    102 => "高级设置",
+                    104 => "发送队列",
+                    _ => "日志与对话",
+                },
+            );
+            self.put(
+                630,
+                match page {
+                    100 => "选择允许红色问答接管的私聊和群聊",
+                    101 => "绑定微信，并连接你的红色问答",
+                    102 => "自动识别优先，需要时再调整",
+                    104 => "查看已入队回复的实际发送和撤回结果",
+                    _ => "保留消息原文，核对每一次收发",
+                },
+            );
+            let _ = InvalidateRect(Some(self.root), None, false);
+            for id in 100..=104 {
+                let _ = InvalidateRect(Some(self.controls[&id]), None, false);
+            }
             self.layout();
         }
     }
@@ -472,74 +561,162 @@ impl App {
             }
         }
     }
+    fn side_width(&self) -> i32 {
+        unsafe {
+            let mut r = RECT::default();
+            let _ = GetClientRect(self.root, &mut r);
+            if r.right as f64 / self.scale < 1100. {
+                192
+            } else {
+                ((r.right as f64 / self.scale / 6.).round() as i32).min(264)
+            }
+        }
+    }
+    fn account_rect(&self) -> RECT {
+        unsafe {
+            let mut r = RECT::default();
+            let _ = GetClientRect(self.root, &mut r);
+            let v = self.vertical();
+            theme::rect(
+                self.side_width() + 28,
+                ((if self.tls_expanded { 132. } else { 170. }) * v) as i32,
+                (r.right as f64 / self.scale) as i32 - self.side_width() - 56,
+                ((if self.tls_expanded { 112. } else { 126. }) * v) as i32,
+            )
+        }
+    }
+    fn vertical(&self) -> f64 {
+        unsafe {
+            let mut r = RECT::default();
+            let _ = GetClientRect(self.root, &mut r);
+            ((r.bottom as f64 / self.scale - 140.) / 674.).clamp(0.90, 1.35)
+        }
+    }
+    unsafe fn field(&self, id: i32, x: i32, y: i32, w: i32, h: i32) {
+        unsafe {
+            self.place(id, x + 9, y + 6, w - 18, h - 12);
+        }
+    }
     unsafe fn layout(&self) {
         unsafe {
             let mut r = RECT::default();
             let _ = GetClientRect(self.root, &mut r);
             let w = (r.right as f64 / self.scale) as i32;
             let h = (r.bottom as f64 / self.scale) as i32;
-            let width = w - 48;
-            self.place(600, 24, 20, 500, 32);
-            self.place(STATUS, w - 410, 24, 386, 30);
-            self.place(300, 24, 64, 120, 32);
-            self.place(301, 156, 64, 120, 32);
-            for (i, id) in [100, 101, 102, 103].iter().enumerate() {
-                self.place(*id, 24 + i as i32 * 170, 116, 160, 34);
+            let side = self.side_width();
+            let left = side + 28;
+            let width = w - left - 28;
+            let v = self.vertical();
+            let y = |n: i32| (n as f64 * v) as i32;
+            let bottom = h - 152;
+            self.place(631, 53, 20, side - 62, 30);
+            for (i, id) in [101, 100, 104, 103, 102].iter().enumerate() {
+                self.place(*id, 12, 48 + i as i32 * 62, side - 24, 54);
             }
-            self.place(NOTICE, 24, h - 80, width, 26);
-            self.place(302, w - 288, h - 42, 132, 32);
-            self.place(303, w - 144, h - 42, 120, 32);
-            let top = 174;
-            let bottom = h - 100;
-            let half = width / 2;
-            self.place(610, 24, top, half - 12, 28);
-            self.place(611, 24 + half + 12, top, half - 12, 28);
-            self.place(612, 24, top + 34, width, 30);
-            self.place(405, 24, top + 72, width - 430, 240);
-            self.place(308, w - 442, top + 70, 126, 32);
-            self.place(309, w - 306, top + 70, 126, 32);
-            self.place(310, w - 170, top + 70, 146, 32);
-            let list = (bottom - top - 190).max(100);
-            self.place(200, 24, top + 118, half - 12, list);
-            self.place(201, 24 + half + 12, top + 118, half - 12, list);
-            self.place(613, 24, bottom - 56, width, 42);
-            self.place(614, 24, bottom - 10, width, 26);
-            for (i, id) in (500..508).enumerate() {
-                self.place(id + 200, 24, top + i as i32 * 38 + 4, 210, 26);
-                self.place(
-                    id,
-                    238,
-                    top + i as i32 * 38,
-                    width - 214 - if id == 503 { 130 } else { 0 },
-                    28,
+            self.place(STATUS, 22, h - 54, side - 38, 38);
+            self.place(600, left, y(36), width, 48);
+            self.place(630, left, y(86), width, 28);
+            self.place(NOTICE, left, h - 124, width, 22);
+            self.place(300, left, h - 86, 158, 44);
+            self.place(301, left + 170, h - 86, 132, 44);
+            self.place(303, w - 326, h - 86, 134, 44);
+            self.place(302, w - 180, h - 86, 152, 44);
+            self.place(633, left + 8, y(134), 180, 26);
+            self.place(634, left + 218, y(134), 260, 26);
+            let card = self.account_rect();
+            let cy = card.top;
+            let offset = (width as f64 * 0.104) as i32;
+            let selection = (width as f64 * 0.39) as i32;
+            self.place(620, left + offset, cy + y(18), selection - offset - 20, 32);
+            self.place(402, left + offset, cy + y(54), selection - offset - 20, 24);
+            self.place(635, left + offset, cy + y(84), selection - offset - 20, 24);
+            let select = left + selection;
+            let select_width = width - selection - 244;
+            self.place(636, select, cy + y(20), width - selection - 16, 26);
+            self.place(403, select, cy + y(54), select_width, 230);
+            self.place(305, w - 260, cy + y(52), 108, y(38));
+            self.place(306, w - 142, cy + y(52), 114, y(38));
+            let top = if self.tls_expanded { 268 } else { 336 };
+            let third = (width - 36) / 3;
+            let half = (width - 18) / 2;
+            self.place(632, left, y(top), width, 34);
+            for (id, x, fw) in [
+                (500, left, third),
+                (501, left + third + 18, third),
+                (502, left + 2 * (third + 18), width - 2 * (third + 18)),
+            ] {
+                self.place(id + 200, x, y(top + 44), fw, 26);
+                self.field(id, x, y(top + 72), fw, y(36));
+            }
+            self.place(704, left, y(top + 132), half, 26);
+            self.field(504, left, y(top + 160), half, y(36));
+            self.place(703, left + half + 18, y(top + 132), half, 26);
+            self.field(503, left + half + 18, y(top + 160), half - 46, y(36));
+            self.place(307, w - 68, y(top + 160), 40, y(36));
+            self.place(705, left, y(top + 216), width, 26);
+            self.field(505, left, y(top + 244), width - 250, y(36));
+            self.place(304, w - 266, y(top + 244), 238, y(36));
+            self.place(319, left, y(top + 300), width, y(38));
+            for id in [506, 507, 706, 707] {
+                let _ = ShowWindow(
+                    self.controls[&id],
+                    if self.page == 101 && self.tls_expanded {
+                        SW_SHOW
+                    } else {
+                        SW_HIDE
+                    },
                 );
             }
-            self.place(307, w - 148, top + 114, 124, 28);
-            self.place(304, 24, top + 318, 340, 34);
-            self.place(620, 24, top, width, 30);
-            self.place(403, 24, top + 42, width - 280, 220);
-            self.place(305, w - 282, top + 40, 120, 32);
-            self.place(306, w - 150, top + 40, 126, 32);
-            self.place(402, 24, top + 90, width, 45);
-            self.place(621, 24, top + 140, width, 28);
-            self.place(622, 24, top + 176, 270, 30);
-            self.place(508, 304, top + 174, 120, 30);
-            self.place(625, 24, top + 212, 270, 30);
-            self.place(510, 304, top + 210, 240, 30);
-            self.place(626, 24, top + 248, 270, 30);
-            self.place(509, 304, top + 246, 120, 30);
-            self.place(511, 24, top + 286, 450, 28);
-            self.place(512, 500, top + 284, 300, 30);
-            self.place(623, 24, top + 326, width, 42);
-            self.place(624, 24, top + 376, width, 48);
-            for (i, id) in [311, 312, 313, 314, 318].iter().enumerate() {
-                self.place(*id, 24 + i as i32 * 108, top, 100, 32);
+            for (id, x) in [(506, left), (507, left + half + 18)] {
+                self.place(id + 200, x, y(top + 344), half, 22);
+                self.field(id, x, y(top + 370), half, y(34));
             }
-            self.place(315, 568, top, 110, 32);
-            self.place(317, 690, top, 150, 32);
-            self.place(627, 24, top + 40, width, 28);
-            self.place(628, 24, top + 70, width, 26);
-            self.place(404, 24, top + 100, width, bottom - top - 112);
+            // Whitelist: choose once, add/save once; manual editors remain available.
+            self.place(612, left, 126, width, 24);
+            self.place(405, left, 170, (width - 396).max(100), 220);
+            self.place(308, w - 412, 168, 118, 38);
+            self.place(309, w - 284, 168, 122, 38);
+            self.place(310, w - 152, 168, 124, 38);
+            self.place(610, left, 230, half, 28);
+            self.place(611, left + half + 18, 230, half, 28);
+            self.field(200, left, 268, half, (bottom - 302).max(140));
+            self.field(201, left + half + 18, 268, half, (bottom - 302).max(140));
+            self.place(613, left, bottom - 22, width, 38);
+            self.place(614, left, 214, 1, 1);
+            let _ = ShowWindow(self.controls[&614], SW_HIDE);
+            self.place(621, left, 140, width, 28);
+            self.place(622, left, 198, 270, 26);
+            self.field(508, left + 280, 192, 140, 36);
+            self.place(625, left, 256, 270, 26);
+            self.field(510, left + 280, 250, (width - 280).min(390), 36);
+            self.place(626, left, 314, 270, 26);
+            self.field(509, left + 280, 308, 140, 36);
+            self.place(511, left, 372, width, 28);
+            self.place(512, left, 420, 286, 38);
+            self.place(623, left, 486, width, 46);
+            self.place(624, left, 552, width, 58);
+            for (i, id) in [311, 312, 313, 314].iter().enumerate() {
+                self.place(*id, left + i as i32 * 100, 132, 94, 36);
+            }
+            let _ = ShowWindow(self.controls[&318], SW_HIDE);
+            self.place(315, w - 280, 132, 108, 36);
+            self.place(317, w - 162, 132, 134, 36);
+            self.place(627, left, 186, width, 25);
+            self.place(
+                628,
+                left,
+                if self.page == 104 { 132 } else { 220 },
+                width,
+                30,
+            );
+            self.field(
+                404,
+                left,
+                if self.page == 104 { 182 } else { 262 },
+                width,
+                (bottom - if self.page == 104 { 190 } else { 270 }).max(120),
+            );
+            let _ = InvalidateRect(Some(self.root), None, false);
         }
     }
     unsafe fn refresh(&mut self) {
@@ -566,6 +743,9 @@ impl App {
                 {
                     SendMessageW(h, CB_SETCURSEL, Some(WPARAM(i)), None);
                 }
+            }
+            if self.windows.len() == 1 {
+                SendMessageW(h, CB_SETCURSEL, Some(WPARAM(0)), None);
             }
         }
     }
@@ -638,7 +818,17 @@ impl App {
                 "监听已停止".to_owned()
             };
             self.put(STATUS, &text);
-            let q = &state["outbox"];
+            let stopped_queue = if !running {
+                crate::outbox::gui_summary(&self.config.path.parent().unwrap().join("data"))
+                    .unwrap_or_default()
+            } else {
+                Value::Null
+            };
+            let q = if running {
+                &state["outbox"]
+            } else {
+                &stopped_queue
+            };
             let n = |key: &str| q[key].as_u64().unwrap_or(0);
             self.put(
                 628,
@@ -676,14 +866,54 @@ impl App {
                     },
                 );
             }
-            let _ = EnableWindow(self.controls[&300], !running && self.work.is_none());
+            let bound = self
+                .config
+                .binding()
+                .is_ok_and(|b| native::validate_window(&b).is_ok());
+            let _ = EnableWindow(
+                self.controls[&300],
+                !running && bound && self.work.is_none(),
+            );
             let _ = EnableWindow(self.controls[&301], running && self.work.is_none());
             let _ = EnableWindow(self.controls[&302], self.work.is_none());
             let _ = EnableWindow(self.controls[&308], self.work.is_none());
+            self.put(
+                633,
+                if bound {
+                    "微信 已绑定"
+                } else {
+                    "微信 未绑定"
+                },
+            );
+            self.put(
+                634,
+                if running && state["connected"] == true {
+                    "RedReply 已连接"
+                } else {
+                    "RedReply 未连接"
+                },
+            );
+            self.put(
+                300,
+                if self.dirty {
+                    "保存并启动"
+                } else {
+                    "启动监听"
+                },
+            );
+            if !bound && self.get(NOTICE) == "关闭设置窗口不会停止监听。" {
+                self.put(NOTICE, "绑定微信账号后即可启动监听。");
+            }
+            let _ = ShowWindow(self.controls[&301], if running { SW_SHOW } else { SW_HIDE });
+            let _ = EnableWindow(
+                self.controls[&306],
+                self.work.is_none() && !self.windows.is_empty(),
+            );
+            let _ = EnableWindow(self.controls[&305], self.work.is_none());
             if let Some(e) = state["error"].as_str().filter(|e| !e.is_empty()) {
                 self.put(NOTICE, e);
             }
-            if self.page == 103 && !self.log_paused {
+            if matches!(self.page, 103 | 104) && !self.log_paused {
                 let text = if self.log_filter == 318 {
                     crate::outbox::gui_text(
                         &self.config.path.parent().unwrap().join("data"),
@@ -742,15 +972,17 @@ impl App {
             }
             let result = (|| -> Result<String> {
                 match id {
-                    100..=103 => {
+                    100..=104 => {
                         self.show(id);
                         return Ok(String::new());
                     }
                     300 => {
-                        if self.dirty {
-                            bail!("请先保存设置");
-                        }
-                        let c = self.config.clone();
+                        let c = self.collect()?;
+                        native::validate_window(&c.binding()?)
+                            .context("请先在本页绑定一个已登录的微信账号")?;
+                        config::atomic(&c.path, &c.raw)?;
+                        self.config = c.clone();
+                        self.fill();
                         self.begin(move || {
                             start(&c)?;
                             Ok(Work::Notice(
@@ -800,7 +1032,23 @@ impl App {
                         self.fill();
                     }
                     304 => {
-                        crate::gui_clipboard::copy_text(&self.collect()?.url())?;
+                        let c = self.collect()?;
+                        let restart = c.r() != self.config.r()
+                            || c.raw["wechat_binding"] != self.config.raw["wechat_binding"];
+                        let running = state(&self.config)["running"] == true;
+                        config::atomic(&c.path, &c.raw)?;
+                        self.config = c.clone();
+                        self.fill();
+                        crate::gui_clipboard::copy_text(&c.url())?;
+                        if running && restart {
+                            self.begin(move || {
+                                stop_and_wait(&c)?;
+                                start(&c)?;
+                                Ok(Work::Notice(
+                                    "接入地址已复制，监听已按新参数重新启动。".into(),
+                                ))
+                            })?;
+                        }
                         return Ok("完整接入地址已复制，包含令牌，请勿公开".into());
                     }
                     305 => self.refresh(),
@@ -809,12 +1057,27 @@ impl App {
                         if i < 0 {
                             bail!("请明确选择一个微信窗口");
                         }
-                        let b = &self.windows[i as usize].binding;
-                        native::offscreen(native::validate_window(b)?)?;
-                        self.config.raw["wechat_binding"] = serde_json::to_value(b)?;
-                        self.put(402, &format!("待保存绑定：PID {}　窗口 {}", b.pid, b.hwnd));
-                        self.dirty = true;
-                        return Ok("已选定账号并离屏，请保存并应用".into());
+                        let b = self.windows[i as usize].binding.clone();
+                        let mut c = self.collect()?;
+                        c.raw["wechat_binding"] = serde_json::to_value(&b)?;
+                        native::offscreen(native::validate_window(&b)?)?;
+                        let running = state(&self.config)["running"] == true;
+                        config::atomic(&c.path, &c.raw)?;
+                        self.config = c.clone();
+                        self.fill();
+                        if running {
+                            self.begin(move || {
+                                stop_and_wait(&c)?;
+                                start(&c)?;
+                                Ok(Work::Notice("账号已绑定并保存，监听已重新启动。".into()))
+                            })?;
+                        }
+                        return Ok("账号已绑定并保存；自聊会自动识别，无需再次保存。".into());
+                    }
+                    319 => {
+                        self.tls_expanded = !self.tls_expanded;
+                        self.layout();
+                        return Ok(String::new());
                     }
                     307 => {
                         let h = self.controls[&503];
@@ -924,7 +1187,11 @@ impl App {
                             self.put(field, &names.join("\r\n"));
                             self.dirty = true;
                         }
-                        return Ok("已加入待保存白名单，请保存并应用。".into());
+                        let c = self.collect()?;
+                        config::atomic(&c.path, &c.raw)?;
+                        self.config = c;
+                        self.fill();
+                        return Ok("已加入白名单并保存。".into());
                     }
                     _ => {}
                 }
@@ -1050,14 +1317,14 @@ pub fn run(config: Config) -> Result<()> {
             hInstance: module.into(),
             lpszClassName: class,
             hCursor: LoadCursorW(None, IDC_ARROW)?,
-            hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as usize as _),
+            hbrBackground: HBRUSH(GetStockObject(WHITE_BRUSH).0),
             ..Default::default()
         };
         RegisterClassW(&wc);
         let scale = GetDpiForSystem() as f64 / 96.;
         let face = config::wide("Microsoft YaHei UI");
         let font = CreateFontW(
-            (-16. * scale) as _,
+            (-18. * scale) as _,
             0,
             0,
             0,
@@ -1078,17 +1345,26 @@ pub fn run(config: Config) -> Result<()> {
             std::mem::size_of::<LOGFONTW>() as i32,
             Some(&mut lf as *mut _ as _),
         );
-        lf.lfHeight = (-22. * scale) as i32;
+        lf.lfHeight = (-36. * scale) as i32;
         lf.lfWeight = 600;
         let heading = CreateFontIndirectW(&lf);
+        lf.lfHeight = (-24. * scale) as i32;
+        let section = CreateFontIndirectW(&lf);
+        lf.lfHeight = (-16. * scale) as i32;
+        lf.lfWeight = 400;
+        let small = CreateFontIndirectW(&lf);
         let mut app = Box::new(App {
             config,
             controls: HashMap::new(),
             pages: HashMap::new(),
-            page: 100,
+            page: 101,
             root: HWND::default(),
             font,
             heading,
+            section,
+            small,
+            paint: theme::Paint::new(),
+            tls_expanded: false,
             windows: vec![],
             dirty: false,
             loading: true,
@@ -1101,9 +1377,9 @@ pub fn run(config: Config) -> Result<()> {
         });
         let (width, height) =
             if cfg!(debug_assertions) && std::env::args().any(|s| s == "--gui-minimum") {
-                (1000., 740.)
+                (1020., 800.)
             } else {
-                (1040., 760.)
+                (1280., 900.)
             };
         let h = CreateWindowExW(
             if no_activate {
@@ -1124,6 +1400,13 @@ pub fn run(config: Config) -> Result<()> {
             Some(&mut *app as *mut _ as _),
         )?;
         app.root = h;
+        let caption = theme::SIDE.0;
+        let _ = windows::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+            h,
+            windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE(35),
+            &caption as *const _ as _,
+            4,
+        );
         SetPropW(
             h,
             w!("WechatRedReplyConfig"),
@@ -1160,6 +1443,8 @@ pub fn run(config: Config) -> Result<()> {
         }
         let _ = DeleteObject(app.font.into());
         let _ = DeleteObject(app.heading.into());
+        let _ = DeleteObject(app.section.into());
+        let _ = DeleteObject(app.small.into());
         Ok(())
     }
 }
@@ -1173,20 +1458,106 @@ unsafe extern "system" fn proc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESU
         if !p.is_null() {
             let app = &mut *p;
             match msg {
+                WM_ERASEBKGND => return LRESULT(1),
+                WM_PAINT => {
+                    let mut ps = PAINTSTRUCT::default();
+                    let dc = BeginPaint(h, &mut ps);
+                    theme::paint(app, dc);
+                    let _ = EndPaint(h, &ps);
+                    return LRESULT(0);
+                }
+                WM_DRAWITEM => {
+                    if l.0 != 0 {
+                        theme::draw_button(app, &*(l.0 as *const DRAWITEMSTRUCT));
+                        return LRESULT(1);
+                    }
+                }
+                WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
+                    let dc = HDC(w.0 as *mut _);
+                    let control = HWND(l.0 as *mut _);
+                    let id = GetDlgCtrlID(control);
+                    let side = matches!(id, STATUS | 631);
+                    SetBkMode(dc, TRANSPARENT);
+                    SetTextColor(
+                        dc,
+                        if matches!(
+                            id,
+                            630 | 633
+                                | 634
+                                | 635
+                                | 636
+                                | NOTICE
+                                | 612
+                                | 613
+                                | 623
+                                | 624
+                                | 627
+                                | 628
+                                | 402
+                                | STATUS
+                        ) {
+                            theme::MUTED
+                        } else {
+                            theme::INK
+                        },
+                    );
+                    SetBkColor(dc, if side { theme::SIDE } else { theme::WHITE });
+                    return LRESULT(if side {
+                        app.paint.sidebar.0 as isize
+                    } else {
+                        app.paint.white.0 as isize
+                    });
+                }
                 WM_DPICHANGED => {
                     let revised = (w.0 & 65535) as f64 / 96.;
-                    for heading in [false, true] {
-                        let old = if heading { app.heading } else { app.font };
+                    for kind in 0..4 {
+                        let old = match kind {
+                            0 => app.font,
+                            1 => app.heading,
+                            2 => app.section,
+                            _ => app.small,
+                        };
                         let mut lf = LOGFONTW::default();
                         GetObjectW(
                             old.into(),
                             std::mem::size_of::<LOGFONTW>() as i32,
                             Some(&mut lf as *mut _ as _),
                         );
-                        lf.lfHeight = (-(if heading { 22. } else { 16. }) * revised) as i32;
+                        lf.lfHeight = (-(match kind {
+                            0 => 18.,
+                            1 => 36.,
+                            2 => 24.,
+                            _ => 16.,
+                        }) * revised) as i32;
                         let new = CreateFontIndirectW(&lf);
                         for (&id, &control) in &app.controls {
-                            if (id == 600) == heading {
+                            let control_kind = if id == 600 {
+                                1
+                            } else if matches!(id, 620 | 632) {
+                                2
+                            } else if matches!(
+                                id,
+                                STATUS
+                                    | NOTICE
+                                    | 630
+                                    | 633
+                                    | 634
+                                    | 635
+                                    | 636
+                                    | 402
+                                    | 612
+                                    | 613
+                                    | 614
+                                    | 623
+                                    | 624
+                                    | 627
+                                    | 628
+                            ) {
+                                3
+                            } else {
+                                0
+                            };
+                            if control_kind == kind {
                                 SendMessageW(
                                     control,
                                     WM_SETFONT,
@@ -1195,10 +1566,11 @@ unsafe extern "system" fn proc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESU
                                 );
                             }
                         }
-                        if heading {
-                            app.heading = new;
-                        } else {
-                            app.font = new;
+                        match kind {
+                            0 => app.font = new,
+                            1 => app.heading = new,
+                            2 => app.section = new,
+                            _ => app.small = new,
                         }
                         let _ = DeleteObject(old.into());
                     }
@@ -1225,8 +1597,8 @@ unsafe extern "system" fn proc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESU
                 WM_GETMINMAXINFO => {
                     let m = &mut *(l.0 as *mut MINMAXINFO);
                     m.ptMinTrackSize = POINT {
-                        x: (1000. * app.scale) as _,
-                        y: (740. * app.scale) as _,
+                        x: (1020. * app.scale) as _,
+                        y: (800. * app.scale) as _,
                     };
                     return LRESULT(0);
                 }

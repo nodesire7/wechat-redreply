@@ -9,4 +9,10 @@
 *.tmp
 *.zip
 *.pdb
+/.impeccable/qa/
+/.impeccable/reference/
+/.impeccable/mocks/
+/.impeccable/review/
+/.impeccable/build/
+/.impeccable/regions.json
 
