@@ -223,6 +223,60 @@ pub unsafe fn draw_button(app: &App, d: &DRAWITEMSTRUCT) {
         let dc = d.hDC;
         let r = d.rcItem;
         let s = app.scale;
+        if id == 403 {
+            let selected =
+                d.itemState.0 & ODS_SELECTED.0 != 0 && d.itemState.0 & ODS_COMBOBOXEDIT.0 == 0;
+            FillRect(
+                dc,
+                &r,
+                if selected {
+                    app.paint.sidebar
+                } else {
+                    app.paint.white
+                },
+            );
+            let label = if d.itemID == u32::MAX {
+                "请选择微信窗口".to_owned()
+            } else {
+                let length = SendMessageW(
+                    d.hwndItem,
+                    CB_GETLBTEXTLEN,
+                    Some(WPARAM(d.itemID as usize)),
+                    None,
+                )
+                .0;
+                if !(0..32768).contains(&length) {
+                    return;
+                }
+                let mut buffer = vec![0u16; length as usize + 1];
+                let n = SendMessageW(
+                    d.hwndItem,
+                    CB_GETLBTEXT,
+                    Some(WPARAM(d.itemID as usize)),
+                    Some(LPARAM(buffer.as_mut_ptr() as isize)),
+                )
+                .0;
+                if n < 0 {
+                    return;
+                }
+                String::from_utf16_lossy(&buffer[..n as usize])
+            };
+            let mut content = r;
+            content.left += (7. * s) as i32;
+            content.right -= (5. * s) as i32;
+            text(
+                dc,
+                content,
+                &label,
+                app.font,
+                INK,
+                DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
+            );
+            if d.itemState.0 & ODS_FOCUS.0 != 0 {
+                let _ = DrawFocusRect(dc, &r);
+            }
+            return;
+        }
         let nav = (100..=104).contains(&id);
         let selected = nav && app.page == id;
         let disabled = d.itemState.0 & ODS_DISABLED.0 != 0;
@@ -423,7 +477,7 @@ pub unsafe fn paint(app: &App, dc: HDC) {
                 };
                 let _ = ScreenToClient(app.root, &mut p);
                 let pad = (8. * s) as i32;
-                let py = (6. * s) as i32;
+                let py = (4. * s) as i32;
                 let frame = rect(
                     p.x - pad,
                     p.y - py,

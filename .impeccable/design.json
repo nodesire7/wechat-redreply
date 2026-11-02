@@ -1,0 +1,336 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-02T08:51:13.409947Z",
+  "title": "Design System: 微信 · 红色问答",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Restrained Indigo",
+        "tonalRamp": [
+          "oklch(15.0% 0.21845 275.20)",
+          "oklch(25.0% 0.21845 275.20)",
+          "oklch(35.0% 0.21845 275.20)",
+          "oklch(45.0% 0.21845 275.20)",
+          "oklch(55.0% 0.21845 275.20)",
+          "oklch(65.0% 0.21845 275.20)",
+          "oklch(80.0% 0.21845 275.20)",
+          "oklch(95.0% 0.21845 275.20)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Charcoal Ink",
+        "tonalRamp": [
+          "oklch(15.0% 0.02014 254.87)",
+          "oklch(25.0% 0.02014 254.87)",
+          "oklch(35.0% 0.02014 254.87)",
+          "oklch(45.0% 0.02014 254.87)",
+          "oklch(55.0% 0.02014 254.87)",
+          "oklch(65.0% 0.02014 254.87)",
+          "oklch(80.0% 0.02014 254.87)",
+          "oklch(95.0% 0.02014 254.87)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Slate Secondary",
+        "tonalRamp": [
+          "oklch(15.0% 0.02611 238.08)",
+          "oklch(25.0% 0.02611 238.08)",
+          "oklch(35.0% 0.02611 238.08)",
+          "oklch(45.0% 0.02611 238.08)",
+          "oklch(55.0% 0.02611 238.08)",
+          "oklch(65.0% 0.02611 238.08)",
+          "oklch(80.0% 0.02611 238.08)",
+          "oklch(95.0% 0.02611 238.08)"
+        ]
+      },
+      "sidebar": {
+        "role": "neutral",
+        "displayName": "Icy Navigation Blue",
+        "tonalRamp": [
+          "oklch(15.0% 0.01762 239.99)",
+          "oklch(25.0% 0.01762 239.99)",
+          "oklch(35.0% 0.01762 239.99)",
+          "oklch(45.0% 0.01762 239.99)",
+          "oklch(55.0% 0.01762 239.99)",
+          "oklch(65.0% 0.01762 239.99)",
+          "oklch(80.0% 0.01762 239.99)",
+          "oklch(95.0% 0.01762 239.99)"
+        ]
+      },
+      "working-pane": {
+        "role": "neutral",
+        "displayName": "Working White",
+        "tonalRamp": [
+          "oklch(15.0% 0.00000 89.88)",
+          "oklch(25.0% 0.00000 89.88)",
+          "oklch(35.0% 0.00000 89.88)",
+          "oklch(45.0% 0.00000 89.88)",
+          "oklch(55.0% 0.00000 89.88)",
+          "oklch(65.0% 0.00000 89.88)",
+          "oklch(80.0% 0.00000 89.88)",
+          "oklch(95.0% 0.00000 89.88)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Quiet Divider",
+        "tonalRamp": [
+          "oklch(15.0% 0.01225 247.96)",
+          "oklch(25.0% 0.01225 247.96)",
+          "oklch(35.0% 0.01225 247.96)",
+          "oklch(45.0% 0.01225 247.96)",
+          "oklch(55.0% 0.01225 247.96)",
+          "oklch(65.0% 0.01225 247.96)",
+          "oklch(80.0% 0.01225 247.96)",
+          "oklch(95.0% 0.01225 247.96)"
+        ]
+      },
+      "selected-fill": {
+        "role": "neutral",
+        "displayName": "Selection Blue",
+        "tonalRamp": [
+          "oklch(15.0% 0.03463 252.27)",
+          "oklch(25.0% 0.03463 252.27)",
+          "oklch(35.0% 0.03463 252.27)",
+          "oklch(45.0% 0.03463 252.27)",
+          "oklch(55.0% 0.03463 252.27)",
+          "oklch(65.0% 0.03463 252.27)",
+          "oklch(80.0% 0.03463 252.27)",
+          "oklch(95.0% 0.03463 252.27)"
+        ]
+      },
+      "selected-ink": {
+        "role": "neutral",
+        "displayName": "Selection Ink",
+        "tonalRamp": [
+          "oklch(15.0% 0.15962 272.10)",
+          "oklch(25.0% 0.15962 272.10)",
+          "oklch(35.0% 0.15962 272.10)",
+          "oklch(45.0% 0.15962 272.10)",
+          "oklch(55.0% 0.15962 272.10)",
+          "oklch(65.0% 0.15962 272.10)",
+          "oklch(80.0% 0.15962 272.10)",
+          "oklch(95.0% 0.15962 272.10)"
+        ]
+      },
+      "hover-fill": {
+        "role": "neutral",
+        "displayName": "Hover Fill",
+        "tonalRamp": [
+          "oklch(15.0% 0.01723 248.01)",
+          "oklch(25.0% 0.01723 248.01)",
+          "oklch(35.0% 0.01723 248.01)",
+          "oklch(45.0% 0.01723 248.01)",
+          "oklch(55.0% 0.01723 248.01)",
+          "oklch(65.0% 0.01723 248.01)",
+          "oklch(80.0% 0.01723 248.01)",
+          "oklch(95.0% 0.01723 248.01)"
+        ]
+      },
+      "pressed-fill": {
+        "role": "neutral",
+        "displayName": "Pressed Fill",
+        "tonalRamp": [
+          "oklch(15.0% 0.01104 243.66)",
+          "oklch(25.0% 0.01104 243.66)",
+          "oklch(35.0% 0.01104 243.66)",
+          "oklch(45.0% 0.01104 243.66)",
+          "oklch(55.0% 0.01104 243.66)",
+          "oklch(65.0% 0.01104 243.66)",
+          "oklch(80.0% 0.01104 243.66)",
+          "oklch(95.0% 0.01104 243.66)"
+        ]
+      },
+      "primary-pressed": {
+        "role": "neutral",
+        "displayName": "Pressed Indigo",
+        "tonalRamp": [
+          "oklch(15.0% 0.20471 274.02)",
+          "oklch(25.0% 0.20471 274.02)",
+          "oklch(35.0% 0.20471 274.02)",
+          "oklch(45.0% 0.20471 274.02)",
+          "oklch(55.0% 0.20471 274.02)",
+          "oklch(65.0% 0.20471 274.02)",
+          "oklch(80.0% 0.20471 274.02)",
+          "oklch(95.0% 0.20471 274.02)"
+        ]
+      },
+      "disabled-fill": {
+        "role": "neutral",
+        "displayName": "Disabled Fill",
+        "tonalRamp": [
+          "oklch(15.0% 0.00763 241.67)",
+          "oklch(25.0% 0.00763 241.67)",
+          "oklch(35.0% 0.00763 241.67)",
+          "oklch(45.0% 0.00763 241.67)",
+          "oklch(55.0% 0.00763 241.67)",
+          "oklch(65.0% 0.00763 241.67)",
+          "oklch(80.0% 0.00763 241.67)",
+          "oklch(95.0% 0.00763 241.67)"
+        ]
+      },
+      "disabled-ink": {
+        "role": "neutral",
+        "displayName": "Disabled Ink",
+        "tonalRamp": [
+          "oklch(15.0% 0.02353 241.59)",
+          "oklch(25.0% 0.02353 241.59)",
+          "oklch(35.0% 0.02353 241.59)",
+          "oklch(45.0% 0.02353 241.59)",
+          "oklch(55.0% 0.02353 241.59)",
+          "oklch(65.0% 0.02353 241.59)",
+          "oklch(80.0% 0.02353 241.59)",
+          "oklch(95.0% 0.02353 241.59)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Page heading",
+        "purpose": "Native page title; DPI-scaled logical height."
+      },
+      "title": {
+        "displayName": "Section heading",
+        "purpose": "Account and RedReply connection section titles."
+      },
+      "body": {
+        "displayName": "Operational body",
+        "purpose": "Chinese fields, buttons and navigation."
+      },
+      "secondary": {
+        "displayName": "Supporting text",
+        "purpose": "Muted explanations, notices and status; same source size as body."
+      }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "native-minimum-window",
+        "value": "1020x800 logical px"
+      },
+      {
+        "name": "compact-sidebar-threshold",
+        "value": "1100 logical client px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Native preview translation only. Indigo save action; native focus is approximated.",
+      "html": "<button class=\"ds-primary\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" aria-hidden=\"true\"><path d=\"M4 3h14l3 3v15H3V3h1M7 3v7h10V3M7 21v-6h10v6\"/></svg>保存并应用</button>",
+      "css": ".ds-primary{font-family:\"Microsoft YaHei UI\",sans-serif;font-size:20px;font-weight:400;display:inline-flex;align-items:center;justify-content:center;gap:11px;height:44px;width:152px;border:1px solid #4949DD;border-radius:5px;background:#4949DD;color:#FFFFFF}.ds-primary:hover{background:#4949DD}.ds-primary:active{background:#3533BB}.ds-primary:focus-visible{outline:1px dotted #192029;outline-offset:-4px;}.ds-primary:disabled{background:#E5EAEE;color:#74828D;border-color:#D5DCE3}"
+    },
+    {
+      "name": "Secondary action",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Native preview translation only. White outlined action with immediate hover and press.",
+      "html": "<button class=\"ds-secondary\">重新载入</button>",
+      "css": ".ds-secondary{font-family:\"Microsoft YaHei UI\",sans-serif;font-size:20px;font-weight:400;height:44px;width:134px;border:1px solid #D5DCE3;border-radius:5px;background:#FFFFFF;color:#192029}.ds-secondary:hover{background:#E5EFF9}.ds-secondary:active{background:#E7EEF4}.ds-secondary:focus-visible{outline:1px dotted #192029;outline-offset:-4px;}.ds-secondary:disabled{background:#E5EAEE;color:#74828D}"
+    },
+    {
+      "name": "Disabled action",
+      "kind": "button",
+      "refersTo": "button-disabled",
+      "description": "Native preview translation only. Unavailable Start communicates an actual prerequisite.",
+      "html": "<button class=\"ds-disabled\" disabled>启动监听</button>",
+      "css": ".ds-disabled{font-family:\"Microsoft YaHei UI\",sans-serif;font-size:20px;font-weight:400;height:44px;width:158px;border:1px solid #D5DCE3;border-radius:5px;background:#E5EAEE;color:#74828D}"
+    },
+    {
+      "name": "Text field",
+      "kind": "input",
+      "refersTo": "text-field",
+      "description": "Native preview translation only. Editable Chinese-label field, with harmless loopback example.",
+      "html": "<label class=\"ds-field-label\">对外连接地址<input class=\"ds-field\" value=\"127.0.0.1\" /></label>",
+      "css": ".ds-field-label{font-family:\"Microsoft YaHei UI\",sans-serif;font-size:20px;font-weight:400;display:grid;gap:6px;color:#192029}.ds-field{font-family:\"Microsoft YaHei UI\",sans-serif;font-size:20px;font-weight:400;height:34px;padding:0 8px;border:1px solid #D5DCE3;border-radius:4px;background:#FFFFFF;color:#192029}.ds-field:hover{border-color:#D5DCE3}.ds-field:focus-visible{outline:1px solid #192029;outline-offset:1px}"
+    },
+    {
+      "name": "Selected navigation",
+      "kind": "nav",
+      "refersTo": "navigation-selected",
+      "description": "Native preview translation only. Pale-blue rail with selected account row.",
+      "html": "<nav class=\"ds-nav\"><button class=\"ds-nav-selected\" aria-current=\"page\"><svg width=\"21\" height=\"21\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" aria-hidden=\"true\"><ellipse cx=\"12\" cy=\"6\" rx=\"4\" ry=\"4\"/><path d=\"M4 22v-4l3-4h10l3 4v4\"/></svg>账号与接入</button><button class=\"ds-nav-neutral\">接管范围</button></nav>",
+      "css": ".ds-nav{background:#E6F2FB;padding:12px;width:216px}.ds-nav button{font-family:\"Microsoft YaHei UI\",sans-serif;font-size:20px;font-weight:400;display:flex;align-items:center;gap:12px;height:54px;width:100%;margin-bottom:8px;padding:0 16px;border:0;border-radius:5px;text-align:left}.ds-nav-selected{background:#D2E4F9;color:#2E399C}.ds-nav-neutral{background:#E6F2FB;color:#192029}.ds-nav-neutral:hover{background:#E5EFF9}.ds-nav-neutral:active{background:#E7EEF4}.ds-nav button:focus-visible{outline:1px dotted #192029;outline-offset:-4px;}"
+    },
+    {
+      "name": "Account strip",
+      "kind": "card",
+      "refersTo": "account-strip",
+      "description": "Native preview translation only. Explicit identity text in the selected stacked composition.",
+      "html": "<section class=\"ds-account\"><div><strong>微信账号</strong><p>未绑定</p><p>仅绑定所选账号</p></div><button>绑定账号</button></section>",
+      "css": ".ds-account{font-family:\"Microsoft YaHei UI\",sans-serif;font-size:20px;font-weight:400;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 20px;border:1px solid #D5DCE3;border-radius:7px;background:#FFFFFF;color:#192029}.ds-account strong{font-size:30px;font-weight:600}.ds-account p{color:#596974;margin:4px 0}.ds-account button{font-family:\"Microsoft YaHei UI\",sans-serif;font-size:20px;font-weight:400;height:38px;min-width:126px;border:1px solid #4949DD;border-radius:5px;background:#4949DD;color:white}.ds-account button:hover{background:#4949DD}.ds-account button:active{background:#3533BB}.ds-account button:focus-visible{outline:1px dotted #192029;outline-offset:-4px;}"
+    },
+    {
+      "name": "WSS disclosure",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Native preview translation only. Optional certificate/key section; preview does not expand or save.",
+      "html": "<button class=\"ds-wss\" aria-expanded=\"false\"><svg width=\"21\" height=\"21\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" aria-hidden=\"true\"><path d=\"m9 5 7 7-7 7\"/></svg>WSS 证书与私钥（可选）</button>",
+      "css": ".ds-wss{font-family:\"Microsoft YaHei UI\",sans-serif;font-size:20px;font-weight:400;display:flex;align-items:center;gap:12px;min-height:38px;width:100%;padding:0 16px;background:#FFFFFF;color:#192029;border:1px solid #D5DCE3;border-radius:5px;text-align:left}.ds-wss:hover{background:#E5EFF9}.ds-wss:active{background:#E7EEF4}.ds-wss:focus-visible{outline:1px dotted #192029;outline-offset:-4px;}"
+    },
+    {
+      "name": "Read-only monitoring viewer",
+      "kind": "input",
+      "refersTo": "text-field",
+      "description": "Native preview translation only. Actual native viewer is read-only and available while stopped.",
+      "html": "<label class=\"ds-monitor-label\">发送队列<textarea class=\"ds-monitor\" readonly aria-label=\"发送队列\">监听已停止</textarea></label>",
+      "css": ".ds-monitor-label{font-family:\"Microsoft YaHei UI\",sans-serif;font-size:20px;font-weight:400;display:grid;gap:8px;color:#192029}.ds-monitor{font-family:\"Microsoft YaHei UI\",sans-serif;font-size:20px;font-weight:400;height:140px;padding:4px 8px;background:#FFFFFF;color:#192029;border:1px solid #D5DCE3;border-radius:4px;resize:none}.ds-monitor:hover{border-color:#D5DCE3}.ds-monitor:focus-visible{outline:1px solid #192029;outline-offset:1px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Motrix-style account-first control desk",
+    "overview": "A pale-blue navigation rail and a spacious white working pane make Chinese account and connection settings easy to scan. Restrained indigo actions, charcoal text and small geometric line icons carry the user's pinned Motrix reference into a native Rust / Win32 application delivered as one portable EXE. The surface works in Operate mode: account identity, connection identity and actual running state guide the next action.\n\nThis records the implemented system in `src/gui.rs` and `src/gui_theme.rs`, using `PRODUCT.md` and the account surface brief for durable product constraints. The approved option B composition places the account strip above connection settings and opens on “账号与接入”. It favors saving as part of the requested action. Native Windows chrome, selection, dropdowns, keyboard behavior and editable text remain real controls. There is no browser runtime, shipping UI raster or decorative animation.",
+    "keyCharacteristics": [
+      "Pale-blue side navigation, white working pane and restrained indigo actions.",
+      "Chinese Microsoft YaHei UI typography with clear page and section hierarchy.",
+      "Geometric GDI line icons paired with real native text and controls.",
+      "Persistent operation footer and explicit bound, connected and stopped states.",
+      "Compact responsive desktop settings with action-integrated saving."
+    ],
+    "rules": [
+      {
+        "name": "The Action Accent Rule",
+        "body": "Use indigo for the implemented primary actions and selected navigation ink treatment; keep operational reading surfaces light and neutral.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Chinese Voice Rule",
+        "body": "Use the same Chinese family for application labels and actions; establish hierarchy through the existing size, weight, color and placement roles.",
+        "section": "typography"
+      },
+      {
+        "name": "The Visible Operation Rule",
+        "body": "Keep state, the next available action and the persistent footer readable across the supported desktop sizes, including expanded WSS.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat Working Surface Rule",
+        "body": "Preserve the implemented tonal layering and thin rules; do not add decorative elevation to settings or monitoring surfaces.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** retain the pale-blue rail, white working pane and restrained indigo actions.",
+      "**Do** use the existing Chinese typography roles and consistent DPI scaling.",
+      "**Do** keep native selection, dropdowns, keyboard focus and meaningful control names.",
+      "**Do** retain the persistent footer and honest binding, connection and listener states.",
+      "**Do** preserve one-click saving in binding, whitelist addition, address copy and Start.",
+      "**Do** distinguish queued, delivered, failed and uncertain outcomes."
+    ],
+    "donts": [
+      "**Don't** introduce shipping UI rasters, glyph icons or rasterized screen text.",
+      "**Don't** add unimplemented animations, decorative shadows or invented success metrics.",
+      "**Don't** publish tokens, personal account details or inspection screenshots as design assets.",
+      "**Don't** infer listener startup, account binding or messaging permission from a preview.",
+      "**Don't** treat synthesized ramps or HTML/CSS preview geometry as native source tokens.",
+      "**Don't** equate documented native tokens with accepted pixel equivalence to the comp."
+    ]
+  }
+}

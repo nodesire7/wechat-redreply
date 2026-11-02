@@ -32,6 +32,7 @@ use windows::{
 const PRIVATE: i32 = 200;
 const GROUP: i32 = 201;
 const STATUS: i32 = 400;
+const FONT_SIZES: [f64; 4] = [20., 36., 30., 20.];
 const NOTICE: i32 = 401;
 enum Work {
     Notice(String),
@@ -237,7 +238,9 @@ impl App {
                 403,
                 w!("COMBOBOX"),
                 "",
-                WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
+                WS_TABSTOP
+                    | WS_VSCROLL
+                    | WINDOW_STYLE((CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS) as u32),
                 Some(101),
             )?;
             self.button(305, "刷新窗口", Some(101))?;
@@ -311,6 +314,23 @@ impl App {
                     Some(WPARAM(self.small.0 as usize)),
                     Some(LPARAM(1)),
                 );
+            }
+            // Dialog navigation follows the same order as the visible pages.
+            // Hidden controls are skipped by IsDialogMessage.
+            for id in [
+                101, 100, 104, 103, 102, 403, 305, 306, 500, 501, 502, 504, 503, 307, 505, 304,
+                319, 506, 507, 405, 308, 309, 310, 200, 201, 508, 510, 509, 511, 512, 311, 312,
+                313, 314, 315, 317, 404, 300, 301, 303, 302,
+            ] {
+                SetWindowPos(
+                    self.controls[&id],
+                    Some(HWND_BOTTOM),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                )?;
             }
             self.show(if std::env::args().any(|s| s == "--log-page") {
                 103
@@ -579,9 +599,9 @@ impl App {
             let v = self.vertical();
             theme::rect(
                 self.side_width() + 28,
-                ((if self.tls_expanded { 132. } else { 170. }) * v) as i32,
+                (170. * v) as i32,
                 (r.right as f64 / self.scale) as i32 - self.side_width() - 56,
-                ((if self.tls_expanded { 112. } else { 126. }) * v) as i32,
+                ((if self.tls_expanded { 96. } else { 126. }) * v) as i32,
             )
         }
     }
@@ -594,7 +614,7 @@ impl App {
     }
     unsafe fn field(&self, id: i32, x: i32, y: i32, w: i32, h: i32) {
         unsafe {
-            self.place(id, x + 9, y + 6, w - 18, h - 12);
+            self.place(id, x + 9, y + 4, w - 18, h - 8);
         }
     }
     unsafe fn layout(&self) {
@@ -627,16 +647,60 @@ impl App {
             let cy = card.top;
             let offset = (width as f64 * 0.104) as i32;
             let selection = (width as f64 * 0.39) as i32;
-            self.place(620, left + offset, cy + y(18), selection - offset - 20, 32);
-            self.place(402, left + offset, cy + y(54), selection - offset - 20, 24);
-            self.place(635, left + offset, cy + y(84), selection - offset - 20, 24);
+            self.place(
+                620,
+                left + offset,
+                cy + y(if self.tls_expanded { 8 } else { 18 }),
+                selection - offset - 20,
+                36,
+            );
+            self.place(
+                402,
+                left + offset,
+                cy + y(if self.tls_expanded { 44 } else { 54 }),
+                selection - offset - 20,
+                26,
+            );
+            self.place(
+                635,
+                left + offset,
+                cy + y(if self.tls_expanded { 66 } else { 84 }),
+                selection - offset - 20,
+                26,
+            );
             let select = left + selection;
-            let select_width = width - selection - 244;
-            self.place(636, select, cy + y(20), width - selection - 16, 26);
-            self.place(403, select, cy + y(54), select_width, 230);
-            self.place(305, w - 260, cy + y(52), 108, y(38));
-            self.place(306, w - 142, cy + y(52), 114, y(38));
-            let top = if self.tls_expanded { 268 } else { 336 };
+            let select_width = width - selection - 268;
+            self.place(
+                636,
+                select,
+                cy + y(if self.tls_expanded { 8 } else { 20 }),
+                width - selection - 16,
+                26,
+            );
+            let operation_y = cy + y(if self.tls_expanded { 42 } else { 52 });
+            self.place(403, select, operation_y, select_width, 230);
+            SendMessageW(
+                self.controls[&403],
+                CB_SETITEMHEIGHT,
+                Some(WPARAM(usize::MAX)),
+                Some(LPARAM((y(38) as f64 * self.scale) as isize - 6)),
+            );
+            SendMessageW(
+                self.controls[&403],
+                CB_SETDROPPEDWIDTH,
+                Some(WPARAM((width as f64 * self.scale) as usize)),
+                None,
+            );
+            self.place(305, w - 284, operation_y, 120, y(38));
+            self.place(306, w - 154, operation_y, 126, y(38));
+            let top = if self.tls_expanded { 280 } else { 336 };
+            let row = |expanded: i32, collapsed: i32| {
+                if self.tls_expanded {
+                    expanded
+                } else {
+                    collapsed
+                }
+            };
             let third = (width - 36) / 3;
             let half = (width - 18) / 2;
             self.place(632, left, y(top), width, 34);
@@ -645,18 +709,24 @@ impl App {
                 (501, left + third + 18, third),
                 (502, left + 2 * (third + 18), width - 2 * (third + 18)),
             ] {
-                self.place(id + 200, x, y(top + 44), fw, 26);
-                self.field(id, x, y(top + 72), fw, y(36));
+                self.place(id + 200, x, y(top + row(40, 44)), fw, 26);
+                self.field(id, x, y(top + row(66, 72)), fw, y(36));
             }
-            self.place(704, left, y(top + 132), half, 26);
-            self.field(504, left, y(top + 160), half, y(36));
-            self.place(703, left + half + 18, y(top + 132), half, 26);
-            self.field(503, left + half + 18, y(top + 160), half - 46, y(36));
-            self.place(307, w - 68, y(top + 160), 40, y(36));
-            self.place(705, left, y(top + 216), width, 26);
-            self.field(505, left, y(top + 244), width - 250, y(36));
-            self.place(304, w - 266, y(top + 244), 238, y(36));
-            self.place(319, left, y(top + 300), width, y(38));
+            self.place(704, left, y(top + row(118, 132)), half, 26);
+            self.field(504, left, y(top + row(144, 160)), half, y(36));
+            self.place(703, left + half + 18, y(top + row(118, 132)), half, 26);
+            self.field(
+                503,
+                left + half + 18,
+                y(top + row(144, 160)),
+                half - 46,
+                y(36),
+            );
+            self.place(307, w - 68, y(top + row(144, 160)), 40, y(36));
+            self.place(705, left, y(top + row(192, 216)), width, 26);
+            self.field(505, left, y(top + row(218, 244)), width - 250, y(36));
+            self.place(304, w - 266, y(top + row(218, 244)), 238, y(36));
+            self.place(319, left, y(top + row(270, 300)), width, y(38));
             for id in [506, 507, 706, 707] {
                 let _ = ShowWindow(
                     self.controls[&id],
@@ -668,8 +738,8 @@ impl App {
                 );
             }
             for (id, x) in [(506, left), (507, left + half + 18)] {
-                self.place(id + 200, x, y(top + 344), half, 22);
-                self.field(id, x, y(top + 370), half, y(34));
+                self.place(id + 200, x, y(top + 318), half, 26);
+                self.field(id, x, y(top + 348), half, y(34));
             }
             // Whitelist: choose once, add/save once; manual editors remain available.
             self.place(612, left, 126, width, 24);
@@ -693,14 +763,14 @@ impl App {
             self.field(509, left + 280, 308, 140, 36);
             self.place(511, left, 372, width, 28);
             self.place(512, left, 420, 286, 38);
-            self.place(623, left, 486, width, 46);
+            self.place(623, left, 486, width, 56);
             self.place(624, left, 552, width, 58);
             for (i, id) in [311, 312, 313, 314].iter().enumerate() {
                 self.place(*id, left + i as i32 * 100, 132, 94, 36);
             }
             let _ = ShowWindow(self.controls[&318], SW_HIDE);
-            self.place(315, w - 280, 132, 108, 36);
-            self.place(317, w - 162, 132, 134, 36);
+            self.place(315, w - 312, 132, 108, 36);
+            self.place(317, w - 194, 132, 166, 36);
             self.place(627, left, 186, width, 25);
             self.place(
                 628,
@@ -1324,7 +1394,7 @@ pub fn run(config: Config) -> Result<()> {
         let scale = GetDpiForSystem() as f64 / 96.;
         let face = config::wide("Microsoft YaHei UI");
         let font = CreateFontW(
-            (-18. * scale) as _,
+            (-FONT_SIZES[0] * scale) as _,
             0,
             0,
             0,
@@ -1345,12 +1415,12 @@ pub fn run(config: Config) -> Result<()> {
             std::mem::size_of::<LOGFONTW>() as i32,
             Some(&mut lf as *mut _ as _),
         );
-        lf.lfHeight = (-36. * scale) as i32;
+        lf.lfHeight = (-FONT_SIZES[1] * scale) as i32;
         lf.lfWeight = 600;
         let heading = CreateFontIndirectW(&lf);
-        lf.lfHeight = (-24. * scale) as i32;
+        lf.lfHeight = (-FONT_SIZES[2] * scale) as i32;
         let section = CreateFontIndirectW(&lf);
-        lf.lfHeight = (-16. * scale) as i32;
+        lf.lfHeight = (-FONT_SIZES[3] * scale) as i32;
         lf.lfWeight = 400;
         let small = CreateFontIndirectW(&lf);
         let mut app = Box::new(App {
@@ -1466,6 +1536,19 @@ unsafe extern "system" fn proc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESU
                     let _ = EndPaint(h, &ps);
                     return LRESULT(0);
                 }
+                WM_MEASUREITEM => {
+                    if l.0 != 0 {
+                        let item = &mut *(l.0 as *mut MEASUREITEMSTRUCT);
+                        if item.CtlID == 403 {
+                            item.itemHeight = (28. * app.scale) as u32;
+                            return LRESULT(1);
+                        }
+                    }
+                }
+                WM_PRINTCLIENT => {
+                    theme::paint(app, HDC(w.0 as *mut _));
+                    return LRESULT(0);
+                }
                 WM_DRAWITEM => {
                     if l.0 != 0 {
                         theme::draw_button(app, &*(l.0 as *const DRAWITEMSTRUCT));
@@ -1523,12 +1606,7 @@ unsafe extern "system" fn proc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESU
                             std::mem::size_of::<LOGFONTW>() as i32,
                             Some(&mut lf as *mut _ as _),
                         );
-                        lf.lfHeight = (-(match kind {
-                            0 => 18.,
-                            1 => 36.,
-                            2 => 24.,
-                            _ => 16.,
-                        }) * revised) as i32;
+                        lf.lfHeight = (-FONT_SIZES[kind as usize] * revised) as i32;
                         let new = CreateFontIndirectW(&lf);
                         for (&id, &control) in &app.controls {
                             let control_kind = if id == 600 {

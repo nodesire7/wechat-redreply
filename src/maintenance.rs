@@ -289,9 +289,55 @@ pub fn capture_settings(c: &Config, output: &std::path::Path) -> Result<()> {
                 {
                     bail!("设置窗口未完成布局，未保存可能失真的截图");
                 }
+                let _ = windows::Win32::Graphics::Gdi::RedrawWindow(
+                    Some(window),
+                    None,
+                    None,
+                    windows::Win32::Graphics::Gdi::RDW_INVALIDATE
+                        | windows::Win32::Graphics::Gdi::RDW_UPDATENOW
+                        | windows::Win32::Graphics::Gdi::RDW_ALLCHILDREN
+                        | windows::Win32::Graphics::Gdi::RDW_FRAME,
+                );
                 std::thread::sleep(std::time::Duration::from_millis(180));
-                let result = native::capture(window).and_then(|image| {
-                    image.save(output)?;
+                if args.iter().any(|s| s == "--settings-layout-report") {
+                    let mut controls = Vec::new();
+                    for id in [
+                        403, 305, 306, 633, 634, 500, 501, 502, 504, 503, 505, 304, 319, 506, 507,
+                    ] {
+                        if let Ok(control) = GetDlgItem(Some(window), id) {
+                            let mut r = RECT::default();
+                            GetWindowRect(control, &mut r)?;
+                            controls.push(serde_json::json!({"id":id,"visible":IsWindowVisible(control).as_bool(),"rect":[r.left,r.top,r.right,r.bottom]}));
+                        }
+                    }
+                    let combo = GetDlgItem(Some(window), 403)?;
+                    config::atomic(
+                        &output.with_extension("layout.json"),
+                        &serde_json::json!({"controls":controls,"selection_height":SendMessageW(combo, CB_GETITEMHEIGHT, Some(WPARAM(usize::MAX)),None).0,"dpi":windows::Win32::UI::HiDpi::GetDpiForWindow(window)}),
+                    )?;
+                }
+                let result = native::capture_gdi(window).and_then(|image| {
+                    if let Some(path) = args
+                        .iter()
+                        .position(|s| s == "--settings-physical-copy")
+                        .and_then(|i| args.get(i + 1))
+                    {
+                        image.save(path)?;
+                    }
+                    if args.iter().any(|s| s == "--settings-logical-image") {
+                        // Keep a comparison capture in device-independent
+                        // pixels, while ordinary captures retain physical pixels.
+                        let dpi = windows::Win32::UI::HiDpi::GetDpiForWindow(window).max(96);
+                        let normalized = image::imageops::resize(
+                            &image,
+                            (image.width() * 96 / dpi).max(1),
+                            (image.height() * 96 / dpi).max(1),
+                            image::imageops::FilterType::Lanczos3,
+                        );
+                        normalized.save(output)?;
+                    } else {
+                        image.save(output)?;
+                    }
                     Ok(())
                 });
                 if alter {

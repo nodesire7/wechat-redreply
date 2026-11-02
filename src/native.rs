@@ -243,6 +243,12 @@ pub fn dpi() {
     }
 }
 pub fn capture(h: HWND) -> Result<image::RgbImage> {
+    capture_window(h, 2)
+}
+pub fn capture_gdi(h: HWND) -> Result<image::RgbImage> {
+    capture_window(h, 0)
+}
+fn capture_window(h: HWND, flags: u32) -> Result<image::RgbImage> {
     use windows::Win32::Graphics::Gdi::*;
     unsafe {
         let mut r = RECT::default();
@@ -262,7 +268,7 @@ pub fn capture(h: HWND) -> Result<image::RgbImage> {
             if !windows::Win32::Storage::Xps::PrintWindow(
                 h,
                 memory,
-                windows::Win32::Storage::Xps::PRINT_WINDOW_FLAGS(2),
+                windows::Win32::Storage::Xps::PRINT_WINDOW_FLAGS(flags),
             )
             .as_bool()
             {

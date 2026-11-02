@@ -221,6 +221,15 @@ pub struct Peer {
     pub group: bool,
     pub wxid: String,
 }
+fn self_chat(conn: &Connection, own: &str) -> Result<Peer> {
+    let name: String = conn.query_row("SELECT COALESCE(NULLIF(remark,''),NULLIF(nick_name,''),username) FROM contact WHERE username=?1 LIMIT 1", [own], |r| r.get(0))
+        .context("未找到本账号自聊；可在高级设置手动填写自己的微信名称")?;
+    Ok(Peer {
+        name,
+        wxid: own.to_owned(),
+        group: false,
+    })
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     pub local_id: i64,
@@ -253,13 +262,7 @@ impl Database {
                 .get_mut("contact/contact.db")
                 .context("contact database missing")?
                 .open()?;
-            let name: String = conn.query_row("SELECT COALESCE(NULLIF(remark,''),NULLIF(nick_name,''),username) FROM contact WHERE username=?1 LIMIT 1", [&self.wxid], |r| r.get(0))
-                .context("未找到本账号自聊；可在高级设置手动填写自己的微信名称")?;
-            return Ok(Peer {
-                name,
-                wxid: self.wxid.clone(),
-                group: false,
-            });
+            return self_chat(&conn, &self.wxid);
         }
         let mut temp = c.clone();
         temp.raw["whitelist"] = serde_json::json!([name]);
@@ -792,6 +795,19 @@ fn note_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_staging_uses_own_identity_even_when_display_names_collide() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE contact(username TEXT,remark TEXT,nick_name TEXT); INSERT INTO contact VALUES('other','相同昵称','好友'),('own','','相同昵称');").unwrap();
+        let peer = self_chat(&db, "own").unwrap();
+        assert_eq!(peer.wxid, "own");
+        assert_eq!(peer.name, "相同昵称");
+        assert!(!peer.group);
+        assert!(self_chat(&db, "missing").is_err());
+        db.execute("UPDATE contact SET nick_name='' WHERE username='own'", [])
+            .unwrap();
+        assert_eq!(self_chat(&db, "own").unwrap().name, "own");
+    }
     use aes::cipher::BlockEncryptMut;
     #[test]
     fn cipher_page_roundtrip() {
