@@ -1,0 +1,12 @@
+/target/
+/dist/
+/dist-build/
+/release/
+/data/
+/config.json
+/evidence/
+*.log
+*.tmp
+*.zip
+*.pdb
+

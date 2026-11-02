@@ -1,0 +1,34 @@
+name: Windows build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust MSVC
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add rustfmt
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Test, build and package
+        shell: pwsh
+        run: ./package.ps1
+      - name: Verify portable package and installer
+        shell: pwsh
+        run: ./verify-package.ps1 -Archive (Get-ChildItem release/*.zip | Select-Object -First 1).FullName
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WechatRedReply-windows-x64
+          path: |
+            release/*.zip
+            release/SHA256SUMS.txt
+

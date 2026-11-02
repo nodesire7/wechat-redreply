@@ -1,0 +1,16 @@
+Wechat RedReply
+Copyright 2026 nodesire7 and contributors
+
+This Rust implementation is distributed under Apache-2.0.
+The project originated from work integrating Luofeng-Cloud/WeChat-AI-AutoReply
+(MIT). Its original notice is retained in licenses/MIT-original-project.txt.
+Database research attribution/license is retained in
+licenses/Apache-2.0-wechat-db.txt.
+
+Third-party dependency license texts are included in THIRD_PARTY_LICENSES.txt
+in release archives and embedded in the executable. Run --licenses to export.
+WeChat and QQ Music product names belong to their respective owners.
+No WeChat client binary, account session, private configuration or chat database
+is included in this distribution. Version-specific native profiles contain
+identifiers and verification signatures, not proprietary client binaries.
+

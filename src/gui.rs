@@ -1,0 +1,1293 @@
+//! Native Windows settings, sharing one EXE with the background listener.
+use crate::{
+    config::{self, Config},
+    native,
+};
+use anyhow::{Context, Result, bail};
+use serde_json::{Value, json};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    process::{Command, Stdio},
+    sync::mpsc,
+    time::Duration,
+};
+use windows::{
+    Win32::{
+        Foundation::*,
+        Graphics::Gdi::*,
+        System::LibraryLoader::GetModuleHandleW,
+        UI::{
+            Controls::*, HiDpi::*, Input::KeyboardAndMouse::EnableWindow, WindowsAndMessaging::*,
+        },
+    },
+    core::{PCWSTR, w},
+};
+const PRIVATE: i32 = 200;
+const GROUP: i32 = 201;
+const STATUS: i32 = 400;
+const NOTICE: i32 = 401;
+enum Work {
+    Notice(String),
+    Contacts(Vec<(String, bool)>),
+}
+struct App {
+    config: Config,
+    controls: HashMap<i32, HWND>,
+    pages: HashMap<i32, Vec<i32>>,
+    page: i32,
+    root: HWND,
+    font: HFONT,
+    heading: HFONT,
+    windows: Vec<native::Window>,
+    dirty: bool,
+    loading: bool,
+    scale: f64,
+    work: Option<mpsc::Receiver<std::result::Result<Work, String>>>,
+    contacts: Vec<(String, bool)>,
+    log_filter: i32,
+    log_paused: bool,
+    log_text: String,
+}
+impl App {
+    unsafe fn add(
+        &mut self,
+        id: i32,
+        class: PCWSTR,
+        text: &str,
+        style: WINDOW_STYLE,
+        page: Option<i32>,
+    ) -> Result<()> {
+        unsafe {
+            let s = config::wide(text);
+            let h = CreateWindowExW(
+                if class == w!("EDIT") {
+                    WS_EX_CLIENTEDGE
+                } else {
+                    WINDOW_EX_STYLE(0)
+                },
+                class,
+                PCWSTR(s.as_ptr()),
+                WS_CHILD | WS_VISIBLE | style,
+                0,
+                0,
+                100,
+                24,
+                Some(self.root),
+                Some(HMENU(id as usize as _)),
+                None,
+                None,
+            )
+            .with_context(|| format!("创建原生控件 {id}"))?;
+            SendMessageW(
+                h,
+                WM_SETFONT,
+                Some(WPARAM(self.font.0 as usize)),
+                Some(LPARAM(1)),
+            );
+            self.controls.insert(id, h);
+            if let Some(p) = page {
+                self.pages.entry(p).or_default().push(id);
+            }
+            Ok(())
+        }
+    }
+    unsafe fn label(&mut self, id: i32, text: &str, page: Option<i32>) -> Result<()> {
+        unsafe { self.add(id, w!("STATIC"), text, WINDOW_STYLE(0), page) }
+    }
+    unsafe fn button(&mut self, id: i32, text: &str, page: Option<i32>) -> Result<()> {
+        unsafe { self.add(id, w!("BUTTON"), text, WS_TABSTOP, page) }
+    }
+    unsafe fn edit(&mut self, id: i32, multi: bool, page: Option<i32>) -> Result<()> {
+        unsafe {
+            self.add(
+                id,
+                w!("EDIT"),
+                "",
+                WS_TABSTOP
+                    | if multi {
+                        WS_VSCROLL
+                            | WINDOW_STYLE((ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN) as u32)
+                    } else {
+                        WINDOW_STYLE(ES_AUTOHSCROLL as u32)
+                    },
+                page,
+            )
+        }
+    }
+    unsafe fn put(&self, id: i32, s: &str) {
+        unsafe {
+            let s = config::wide(s);
+            let _ = SetWindowTextW(self.controls[&id], PCWSTR(s.as_ptr()));
+        }
+    }
+    unsafe fn get(&self, id: i32) -> String {
+        unsafe {
+            let h = self.controls[&id];
+            let mut text = vec![0u16; GetWindowTextLengthW(h) as usize + 1];
+            let n = GetWindowTextW(h, &mut text);
+            String::from_utf16_lossy(&text[..n as usize])
+        }
+    }
+    unsafe fn init(&mut self) -> Result<()> {
+        unsafe {
+            self.label(600, "微信 · 红色问答　Rust 独立版", None)?;
+            SendMessageW(
+                self.controls[&600],
+                WM_SETFONT,
+                Some(WPARAM(self.heading.0 as usize)),
+                Some(LPARAM(1)),
+            );
+            self.label(STATUS, "正在读取运行状态…", None)?;
+            self.button(300, "启动监听", None)?;
+            self.button(301, "停止监听", None)?;
+            for (id, text) in [
+                (100, "接管范围"),
+                (101, "RedReply 连接"),
+                (102, "微信账号"),
+                (103, "日志与对话"),
+            ] {
+                self.button(id, text, None)?;
+            }
+            self.label(NOTICE, "关闭设置窗口不会停止监听。", None)?;
+            self.button(302, "保存并应用", None)?;
+            self.button(303, "重新载入", None)?;
+            self.label(610, "私聊白名单", Some(100))?;
+            self.label(611, "群聊白名单", Some(100))?;
+            self.label(
+                612,
+                "每行一个完整备注名或群名；空列表表示不接管该类会话。",
+                Some(100),
+            )?;
+            self.edit(PRIVATE, true, Some(100))?;
+            self.edit(GROUP, true, Some(100))?;
+            self.add(
+                405,
+                w!("COMBOBOX"),
+                "",
+                WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
+                Some(100),
+            )?;
+            self.button(308, "读取联系人", Some(100))?;
+            self.button(309, "加入白名单", Some(100))?;
+            self.button(310, "复制选中 ID", Some(100))?;
+            self.label(613, "", Some(100))?;
+            self.label(
+                614,
+                "名称必须完全一致；群成员按真实标识区分，不继承私聊主人权限。",
+                Some(100),
+            )?;
+            for (id, label) in [
+                (500, "监听 IP"),
+                (501, "对外连接地址"),
+                (502, "端口"),
+                (503, "接入令牌"),
+                (504, "机器人 ID"),
+                (505, "RedReply 管理地址"),
+                (506, "WSS 证书（可选）"),
+                (507, "WSS 私钥（可选）"),
+            ] {
+                self.label(id + 200, &format!("{label}："), Some(101))?;
+                self.edit(id, false, Some(101))?;
+            }
+            SendMessageW(
+                self.controls[&503],
+                EM_SETPASSWORDCHAR,
+                Some(WPARAM('●' as usize)),
+                None,
+            );
+            self.button(307, "显示令牌", Some(101))?;
+            self.button(304, "复制完整 OneBot 接入地址", Some(101))?;
+            self.label(
+                620,
+                "明确绑定一个已登录微信窗口；不会自动选择其他账号。",
+                Some(102),
+            )?;
+            self.add(
+                403,
+                w!("COMBOBOX"),
+                "",
+                WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
+                Some(102),
+            )?;
+            self.button(305, "刷新窗口", Some(102))?;
+            self.button(306, "绑定此账号", Some(102))?;
+            self.label(402, "尚未绑定", Some(102))?;
+            self.label(621, "接收方式：数据库增量监听（Rust 原生）", Some(102))?;
+            self.label(622, "数据库查询间隔（秒）：", Some(102))?;
+            self.edit(508, false, Some(102))?;
+            self.label(625, "合并转发中转自聊：", Some(102))?;
+            self.edit(510, false, Some(102))?;
+            self.label(626, "撤回上限（秒，最多120）：", Some(102))?;
+            self.edit(509, false, Some(102))?;
+            self.add(
+                511,
+                w!("BUTTON"),
+                "自动同意好友申请，权限仅聊天",
+                WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
+                Some(102),
+            )?;
+            self.button(512, "安全验证后重试好友申请", Some(102))?;
+            self.label(623,"离屏模式已启用：窗口放在所有显示器之外，不最小化。\n自动收发不访问剪贴板、不移动鼠标、不抢前台。",Some(102))?;
+            self.label(624,"配置、日志、缓存位于 EXE 旁；迁移后需要重新绑定微信。\n支持原生合并转发和两分钟内撤回；引用和艾特转换为正文，语音、文件暂不支持。",Some(102))?;
+            self.edit(404, true, Some(103))?;
+            for (id, label) in [
+                (311, "全部"),
+                (312, "对话记录"),
+                (313, "协议明细"),
+                (314, "运行状态"),
+                (318, "发送队列"),
+                (315, "暂停刷新"),
+                (317, "复制当前日志"),
+            ] {
+                self.button(id, label, Some(103))?;
+            }
+            self.label(
+                627,
+                "收发原文、成员、目标、回包和耗时；图片只记录摘要，令牌自动隐藏。",
+                Some(103),
+            )?;
+            self.label(628, "持久化队列：正在读取状态…", Some(103))?;
+            SendMessageW(self.controls[&404], EM_SETREADONLY, Some(WPARAM(1)), None);
+            SendMessageW(
+                self.controls[&404],
+                EM_SETLIMITTEXT,
+                Some(WPARAM(2 * 1024 * 1024)),
+                None,
+            );
+            self.fill();
+            self.refresh();
+            self.show(if std::env::args().any(|s| s == "--log-page") {
+                103
+            } else {
+                100
+            });
+            SetTimer(Some(self.root), 1, 1000, None);
+            self.status();
+            if std::env::args().any(|s| s == "--start-service") {
+                self.command(300, BN_CLICKED as u16);
+            }
+            Ok(())
+        }
+    }
+    unsafe fn fill(&mut self) {
+        unsafe {
+            self.loading = true;
+            for (id, key) in [(200, "whitelist"), (201, "group_whitelist")] {
+                self.put(
+                    id,
+                    &self.config.raw[key]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("\r\n"),
+                );
+            }
+            for (id, key) in [
+                (500, "listen_host"),
+                (501, "connect_host"),
+                (502, "port"),
+                (503, "access_token"),
+                (504, "self_id"),
+                (506, "tls_certfile"),
+                (507, "tls_keyfile"),
+            ] {
+                let v = &self.config.r()[key];
+                self.put(
+                    id,
+                    &v.as_str().map(str::to_owned).unwrap_or_else(|| {
+                        if v.is_null() {
+                            String::new()
+                        } else {
+                            v.to_string()
+                        }
+                    }),
+                );
+            }
+            self.put(
+                505,
+                self.config.raw["redreply_management_url"]
+                    .as_str()
+                    .unwrap_or(""),
+            );
+            self.put(508, &self.config.interval().to_string());
+            SendMessageW(
+                self.controls[&511],
+                BM_SETCHECK,
+                Some(WPARAM(
+                    if self.config.raw["friend_requests_auto_accept"]
+                        .as_bool()
+                        .unwrap_or(false)
+                    {
+                        BST_CHECKED.0 as usize
+                    } else {
+                        BST_UNCHECKED.0 as usize
+                    },
+                )),
+                None,
+            );
+            self.put(
+                509,
+                &crate::actions::recall_limit(&self.config.raw).to_string(),
+            );
+            self.put(
+                510,
+                self.config.raw["forward_staging_chat"]
+                    .as_str()
+                    .unwrap_or(""),
+            );
+            self.put(
+                402,
+                &self
+                    .config
+                    .binding()
+                    .map(|b| format!("当前绑定：PID {}　窗口 {}", b.pid, b.hwnd))
+                    .unwrap_or_else(|_| "尚未绑定，请选择窗口后绑定".to_owned()),
+            );
+            self.put(
+                613,
+                &self
+                    .config
+                    .scope()
+                    .iter()
+                    .map(|(n, g)| {
+                        format!(
+                            "{n}：{}",
+                            if *g {
+                                config::group_id(n)
+                            } else {
+                                config::contact_id(n)
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("　"),
+            );
+            self.dirty = false;
+            self.loading = false;
+        }
+    }
+    unsafe fn collect(&self) -> Result<Config> {
+        unsafe {
+            let mut c = self.config.clone();
+            for (id, key) in [(200, "whitelist"), (201, "group_whitelist")] {
+                let mut names = vec![];
+                for n in self.get(id).lines() {
+                    let n = n.trim().to_owned();
+                    if !n.is_empty() && !names.contains(&n) {
+                        names.push(n);
+                    }
+                }
+                c.raw[key] = json!(names);
+            }
+            for (id, key) in [
+                (500, "listen_host"),
+                (501, "connect_host"),
+                (503, "access_token"),
+                (506, "tls_certfile"),
+                (507, "tls_keyfile"),
+            ] {
+                c.raw["redreply"][key] = self.get(id).trim().into();
+            }
+            c.raw["redreply"]["port"] = self
+                .get(502)
+                .trim()
+                .parse::<u64>()
+                .context("端口应为整数")?
+                .into();
+            c.raw["redreply"]["self_id"] = self
+                .get(504)
+                .trim()
+                .parse::<u64>()
+                .context("机器人 ID 应为整数")?
+                .into();
+            c.raw["redreply_management_url"] = self.get(505).trim().into();
+            let interval = self
+                .get(508)
+                .trim()
+                .parse::<f64>()
+                .context("查询间隔应为数字")?;
+            if !(0.05..=5.).contains(&interval) {
+                bail!("查询间隔须在 0.05–5 秒之间");
+            }
+            c.raw["database_poll_interval_seconds"] = json!(interval);
+            let limit = self
+                .get(509)
+                .trim()
+                .parse::<f64>()
+                .context("撤回上限应为秒数")?;
+            if !limit.is_finite() {
+                bail!("撤回上限必须是有效数字");
+            }
+            c.raw["recall_limit_seconds"] = json!(limit.clamp(1., 120.));
+            let staging = self.get(510).trim().to_owned();
+            if staging.is_empty() {
+                bail!("请填写本账号的自聊名称");
+            }
+            c.raw["forward_staging_chat"] = staging.into();
+            c.raw["friend_requests_auto_accept"] = json!(
+                SendMessageW(self.controls[&511], BM_GETCHECK, None, None).0
+                    == BST_CHECKED.0 as isize
+            );
+            c.raw["receive_backend"] = "database".into();
+            c.raw["offscreen_mode"] = true.into();
+            c.raw["require_fully_hidden"] = true.into();
+            c.validate()?;
+            Ok(c)
+        }
+    }
+    unsafe fn show(&mut self, page: i32) {
+        unsafe {
+            self.page = page;
+            let _ = SetPropW(
+                self.root,
+                w!("WechatRedReplyPage"),
+                Some(HANDLE(page as usize as *mut _)),
+            );
+            for (p, ids) in &self.pages {
+                for id in ids {
+                    let _ = ShowWindow(
+                        self.controls[id],
+                        if *p == page { SW_SHOW } else { SW_HIDE },
+                    );
+                }
+            }
+            self.layout();
+        }
+    }
+    unsafe fn place(&self, id: i32, x: i32, y: i32, w: i32, h: i32) {
+        unsafe {
+            if let Some(c) = self.controls.get(&id) {
+                let s = self.scale;
+                let _ = MoveWindow(
+                    *c,
+                    (x as f64 * s) as _,
+                    (y as f64 * s) as _,
+                    (w as f64 * s) as _,
+                    (h as f64 * s) as _,
+                    true,
+                );
+            }
+        }
+    }
+    unsafe fn layout(&self) {
+        unsafe {
+            let mut r = RECT::default();
+            let _ = GetClientRect(self.root, &mut r);
+            let w = (r.right as f64 / self.scale) as i32;
+            let h = (r.bottom as f64 / self.scale) as i32;
+            let width = w - 48;
+            self.place(600, 24, 20, 500, 32);
+            self.place(STATUS, w - 410, 24, 386, 30);
+            self.place(300, 24, 64, 120, 32);
+            self.place(301, 156, 64, 120, 32);
+            for (i, id) in [100, 101, 102, 103].iter().enumerate() {
+                self.place(*id, 24 + i as i32 * 170, 116, 160, 34);
+            }
+            self.place(NOTICE, 24, h - 80, width, 26);
+            self.place(302, w - 288, h - 42, 132, 32);
+            self.place(303, w - 144, h - 42, 120, 32);
+            let top = 174;
+            let bottom = h - 100;
+            let half = width / 2;
+            self.place(610, 24, top, half - 12, 28);
+            self.place(611, 24 + half + 12, top, half - 12, 28);
+            self.place(612, 24, top + 34, width, 30);
+            self.place(405, 24, top + 72, width - 430, 240);
+            self.place(308, w - 442, top + 70, 126, 32);
+            self.place(309, w - 306, top + 70, 126, 32);
+            self.place(310, w - 170, top + 70, 146, 32);
+            let list = (bottom - top - 190).max(100);
+            self.place(200, 24, top + 118, half - 12, list);
+            self.place(201, 24 + half + 12, top + 118, half - 12, list);
+            self.place(613, 24, bottom - 56, width, 42);
+            self.place(614, 24, bottom - 10, width, 26);
+            for (i, id) in (500..508).enumerate() {
+                self.place(id + 200, 24, top + i as i32 * 38 + 4, 210, 26);
+                self.place(
+                    id,
+                    238,
+                    top + i as i32 * 38,
+                    width - 214 - if id == 503 { 130 } else { 0 },
+                    28,
+                );
+            }
+            self.place(307, w - 148, top + 114, 124, 28);
+            self.place(304, 24, top + 318, 340, 34);
+            self.place(620, 24, top, width, 30);
+            self.place(403, 24, top + 42, width - 280, 220);
+            self.place(305, w - 282, top + 40, 120, 32);
+            self.place(306, w - 150, top + 40, 126, 32);
+            self.place(402, 24, top + 90, width, 45);
+            self.place(621, 24, top + 140, width, 28);
+            self.place(622, 24, top + 176, 270, 30);
+            self.place(508, 304, top + 174, 120, 30);
+            self.place(625, 24, top + 212, 270, 30);
+            self.place(510, 304, top + 210, 240, 30);
+            self.place(626, 24, top + 248, 270, 30);
+            self.place(509, 304, top + 246, 120, 30);
+            self.place(511, 24, top + 286, 450, 28);
+            self.place(512, 500, top + 284, 300, 30);
+            self.place(623, 24, top + 326, width, 42);
+            self.place(624, 24, top + 376, width, 48);
+            for (i, id) in [311, 312, 313, 314, 318].iter().enumerate() {
+                self.place(*id, 24 + i as i32 * 108, top, 100, 32);
+            }
+            self.place(315, 568, top, 110, 32);
+            self.place(317, 690, top, 150, 32);
+            self.place(627, 24, top + 40, width, 28);
+            self.place(628, 24, top + 70, width, 26);
+            self.place(404, 24, top + 100, width, bottom - top - 112);
+        }
+    }
+    unsafe fn refresh(&mut self) {
+        unsafe {
+            self.windows = native::windows();
+            let h = self.controls[&403];
+            SendMessageW(h, CB_RESETCONTENT, None, None);
+            let bound = self.config.binding().ok();
+            for (i, w) in self.windows.iter().enumerate() {
+                let text = config::wide(format!(
+                    "{}　PID {}　{}",
+                    w.title,
+                    w.binding.pid,
+                    if w.offscreen {
+                        "已离屏"
+                    } else {
+                        "当前可见"
+                    }
+                ));
+                SendMessageW(h, CB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
+                if bound
+                    .as_ref()
+                    .is_some_and(|b| b.hwnd == w.binding.hwnd && b.pid == w.binding.pid)
+                {
+                    SendMessageW(h, CB_SETCURSEL, Some(WPARAM(i)), None);
+                }
+            }
+        }
+    }
+    fn begin(&mut self, job: impl FnOnce() -> Result<Work> + Send + 'static) -> Result<()> {
+        if self.work.is_some() {
+            bail!("上一步操作尚未完成，请稍候");
+        }
+        let (tx, rx) = mpsc::channel();
+        self.work = Some(rx);
+        std::thread::spawn(move || {
+            let result = job().map_err(|e| format!("{e:#}"));
+            let _ = tx.send(result);
+        });
+        Ok(())
+    }
+    unsafe fn status(&mut self) {
+        unsafe {
+            if let Some(result) = self.work.as_ref().and_then(|rx| rx.try_recv().ok()) {
+                self.work = None;
+                match result {
+                    Ok(Work::Notice(text)) => self.put(NOTICE, &text),
+                    Ok(Work::Contacts(items)) => {
+                        self.contacts = items;
+                        let combo = self.controls[&405];
+                        SendMessageW(combo, CB_RESETCONTENT, None, None);
+                        for (name, group) in &self.contacts {
+                            let text = config::wide(format!(
+                                "{}　{name}",
+                                if *group { "群聊" } else { "私聊" }
+                            ));
+                            SendMessageW(
+                                combo,
+                                CB_ADDSTRING,
+                                None,
+                                Some(LPARAM(text.as_ptr() as isize)),
+                            );
+                        }
+                        if !self.contacts.is_empty() {
+                            SendMessageW(combo, CB_SETCURSEL, Some(WPARAM(0)), None);
+                        }
+                        self.put(
+                            NOTICE,
+                            &format!(
+                                "已读取 {} 个联系人；选择后可加入白名单或复制 ID。",
+                                self.contacts.len()
+                            ),
+                        );
+                    }
+                    Err(error) => self.put(NOTICE, &error),
+                }
+            }
+            let state = state(&self.config);
+            let running = state["running"] == true;
+            let text = if running {
+                format!(
+                    "{} · {} · {}ms",
+                    if state["ready"] == true {
+                        "微信就绪"
+                    } else {
+                        "初始化中"
+                    },
+                    if state["connected"] == true {
+                        "已连接"
+                    } else {
+                        "等待 RedReply"
+                    },
+                    state["metrics"]["poll_ms"]
+                )
+            } else {
+                "监听已停止".to_owned()
+            };
+            self.put(STATUS, &text);
+            let q = &state["outbox"];
+            let n = |key: &str| q[key].as_u64().unwrap_or(0);
+            self.put(
+                628,
+                &format!(
+                    "发送队列：待发 {} · 准备 {} · 发送 {} · 成功 {} · 失败 {} · 待核对 {}",
+                    n("queued"),
+                    n("preparing"),
+                    n("sending"),
+                    n("sent"),
+                    n("failed"),
+                    n("uncertain")
+                ),
+            );
+            if q["friend_paused_reason"].as_str().is_some() {
+                self.put(512, "安全验证后重试好友申请");
+                self.put(
+                    624,
+                    "好友自动同意已暂停：微信要求账号安全验证。\n请先在微信团队完成验证，再点击上方重试按钮。",
+                );
+            } else {
+                self.put(512, "重新检查好友申请");
+                self.put(624,"好友通过时核对“仅聊天”，不自动加入回复白名单。\n配置位于 EXE 旁，迁移后重新绑定；引用/艾特转正文，语音和文件暂不支持。");
+            }
+            let notice = self.get(NOTICE);
+            if state["ready"] == true
+                && (notice.starts_with("监听正在启动")
+                    || notice == "微信数据库已就绪，等待 RedReply 连接。")
+            {
+                self.put(
+                    NOTICE,
+                    if state["connected"] == true {
+                        "监听已运行，配置已应用。关闭本窗口不会停止监听。"
+                    } else {
+                        "微信数据库已就绪，等待 RedReply 连接。"
+                    },
+                );
+            }
+            let _ = EnableWindow(self.controls[&300], !running && self.work.is_none());
+            let _ = EnableWindow(self.controls[&301], running && self.work.is_none());
+            let _ = EnableWindow(self.controls[&302], self.work.is_none());
+            let _ = EnableWindow(self.controls[&308], self.work.is_none());
+            if let Some(e) = state["error"].as_str().filter(|e| !e.is_empty()) {
+                self.put(NOTICE, e);
+            }
+            if self.page == 103 && !self.log_paused {
+                let text = if self.log_filter == 318 {
+                    crate::outbox::gui_text(
+                        &self.config.path.parent().unwrap().join("data"),
+                        self.config.token(),
+                    )
+                } else {
+                    crate::telemetry::read(
+                        &self.config.path.parent().unwrap().join("data"),
+                        self.log_filter,
+                    )
+                };
+                let text = if text.is_empty() {
+                    "尚无此类记录。启动监听后会载入白名单会话的近期文字记录，并实时显示新消息及调用结果。".into()
+                } else {
+                    text
+                };
+                if self.log_text != text {
+                    let edit = self.controls[&404];
+                    let first = SendMessageW(edit, EM_GETFIRSTVISIBLELINE, None, None).0;
+                    let count = SendMessageW(edit, EM_GETLINECOUNT, None, None).0;
+                    let mut rect = RECT::default();
+                    let _ = GetClientRect(edit, &mut rect);
+                    let bottom =
+                        first + ((rect.bottom - rect.top) as f64 / (16. * self.scale)) as isize + 2
+                            >= count;
+                    self.put(404, &text);
+                    if bottom {
+                        let length = text.encode_utf16().count();
+                        SendMessageW(
+                            edit,
+                            EM_SETSEL,
+                            Some(WPARAM(length)),
+                            Some(LPARAM(length as isize)),
+                        );
+                        SendMessageW(edit, EM_SCROLLCARET, None, None);
+                        // An inactive read-only editor has no native caret.
+                        // Scroll its viewport directly without taking focus.
+                        let lines = SendMessageW(edit, EM_GETLINECOUNT, None, None).0;
+                        SendMessageW(edit, EM_LINESCROLL, None, Some(LPARAM(lines)));
+                    } else {
+                        SendMessageW(edit, EM_LINESCROLL, None, Some(LPARAM(first)));
+                    }
+                    self.log_text = text;
+                }
+            }
+        }
+    }
+    unsafe fn command(&mut self, id: i32, n: u16) {
+        unsafe {
+            if n == EN_CHANGE as u16 && !self.loading && matches!(id, 200 | 201 | 500..=510) {
+                self.dirty = true;
+                return;
+            }
+            if n != BN_CLICKED as u16 {
+                return;
+            }
+            let result = (|| -> Result<String> {
+                match id {
+                    100..=103 => {
+                        self.show(id);
+                        return Ok(String::new());
+                    }
+                    300 => {
+                        if self.dirty {
+                            bail!("请先保存设置");
+                        }
+                        let c = self.config.clone();
+                        self.begin(move || {
+                            start(&c)?;
+                            Ok(Work::Notice(
+                                "监听正在启动，微信数据库就绪后自动接收。".into(),
+                            ))
+                        })?;
+                    }
+                    301 => {
+                        let c = self.config.clone();
+                        self.begin(move || {
+                            stop_and_wait(&c)?;
+                            Ok(Work::Notice("监听已停止。".into()))
+                        })?;
+                    }
+                    302 => {
+                        let c = self.collect()?;
+                        let old = Config::read(self.config.path.clone())?;
+                        let restart = c.r() != old.r()
+                            || c.raw["wechat_binding"] != old.raw["wechat_binding"];
+                        let running = state(&c)["running"] == true;
+                        config::atomic(&c.path, &c.raw)?;
+                        self.config = c;
+                        self.fill();
+                        if running && restart {
+                            let c = self.config.clone();
+                            self.begin(move || {
+                                stop_and_wait(&c)?;
+                                start(&c)?;
+                                Ok(Work::Notice("设置已保存，监听已按新参数重新启动。".into()))
+                            })?;
+                            return Ok("设置已保存，正在重启监听…".into());
+                        }
+                        return Ok("设置已保存，白名单和查询间隔自动应用".into());
+                    }
+                    303 => {
+                        if self.dirty
+                            && MessageBoxW(
+                                Some(self.root),
+                                w!("放弃未保存修改并重新载入？"),
+                                w!("重新载入"),
+                                MB_YESNO | MB_ICONQUESTION,
+                            ) != IDYES
+                        {
+                            return Ok(String::new());
+                        }
+                        self.config = Config::read(self.config.path.clone())?;
+                        self.fill();
+                    }
+                    304 => {
+                        crate::gui_clipboard::copy_text(&self.collect()?.url())?;
+                        return Ok("完整接入地址已复制，包含令牌，请勿公开".into());
+                    }
+                    305 => self.refresh(),
+                    306 => {
+                        let i = SendMessageW(self.controls[&403], CB_GETCURSEL, None, None).0;
+                        if i < 0 {
+                            bail!("请明确选择一个微信窗口");
+                        }
+                        let b = &self.windows[i as usize].binding;
+                        native::offscreen(native::validate_window(b)?)?;
+                        self.config.raw["wechat_binding"] = serde_json::to_value(b)?;
+                        self.put(402, &format!("待保存绑定：PID {}　窗口 {}", b.pid, b.hwnd));
+                        self.dirty = true;
+                        return Ok("已选定账号并离屏，请保存并应用".into());
+                    }
+                    307 => {
+                        let h = self.controls[&503];
+                        let old = SendMessageW(h, EM_GETPASSWORDCHAR, None, None).0;
+                        SendMessageW(
+                            h,
+                            EM_SETPASSWORDCHAR,
+                            Some(WPARAM(if old == 0 { '●' as usize } else { 0 })),
+                            None,
+                        );
+                        let _ = InvalidateRect(Some(h), None, true);
+                    }
+                    311..=314 | 318 => {
+                        self.log_filter = id;
+                        let _ = SetPropW(
+                            self.root,
+                            w!("WechatRedReplyLogFilter"),
+                            Some(HANDLE(id as usize as *mut _)),
+                        );
+                        self.log_text.clear();
+                        self.status();
+                        return Ok(String::new());
+                    }
+                    315 => {
+                        self.log_paused = !self.log_paused;
+                        self.put(
+                            315,
+                            if self.log_paused {
+                                "继续刷新"
+                            } else {
+                                "暂停刷新"
+                            },
+                        );
+                        return Ok(String::new());
+                    }
+                    317 => {
+                        crate::gui_clipboard::copy_text(&self.get(404))?;
+                        return Ok("当前日志已复制。".into());
+                    }
+                    511 => {
+                        self.dirty = true;
+                        return Ok("好友申请设置待保存；通过时强制核对仅聊天权限".into());
+                    }
+                    512 => {
+                        if !self.config.raw["friend_requests_auto_accept"]
+                            .as_bool()
+                            .unwrap_or(false)
+                        {
+                            bail!("请先启用并保存自动同意好友申请");
+                        }
+                        if self.dirty {
+                            bail!("请先保存好友申请设置");
+                        }
+                        let c = self.config.clone();
+                        self.begin(move || {
+                            crate::outbox::resume_friends(&c.path.parent().unwrap().join("data"))?;
+                            Ok(Work::Notice(
+                                "已重新检查好友申请；如果微信仍要求验证，将再次暂停。".into(),
+                            ))
+                        })?;
+                        return Ok("正在恢复好友申请检查…".into());
+                    }
+                    308 => {
+                        let c = self.config.clone();
+                        self.begin(move || {
+                            let cache = c.path.parent().unwrap().join("data/contacts.json");
+                            if let Ok(v) = config::load(&cache) {
+                                if v["binding"] == c.raw["wechat_binding"] {
+                                    return Ok(Work::Contacts(serde_json::from_value(
+                                        v["items"].clone(),
+                                    )?));
+                                }
+                            }
+                            let temp = c.path.parent().unwrap().join("data/contact-picker");
+                            let mut db = crate::database::Database::new(&c, &temp)?;
+                            Ok(Work::Contacts(db.contact_choices()?))
+                        })?;
+                        return Ok("正在读取绑定账号的联系人…".into());
+                    }
+                    309 | 310 => {
+                        let index = SendMessageW(self.controls[&405], CB_GETCURSEL, None, None).0;
+                        let (name, group) = self
+                            .contacts
+                            .get(index as usize)
+                            .context("请先读取并选择联系人")?;
+                        if id == 310 {
+                            crate::gui_clipboard::copy_text(
+                                &if *group {
+                                    config::group_id(name)
+                                } else {
+                                    config::contact_id(name)
+                                }
+                                .to_string(),
+                            )?;
+                            return Ok("选中联系人的 ID 已复制。".into());
+                        }
+                        let field = if *group { GROUP } else { PRIVATE };
+                        let mut names = self
+                            .get(field)
+                            .lines()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>();
+                        if !names.contains(name) {
+                            names.push(name.clone());
+                            self.put(field, &names.join("\r\n"));
+                            self.dirty = true;
+                        }
+                        return Ok("已加入待保存白名单，请保存并应用。".into());
+                    }
+                    _ => {}
+                }
+                Ok("操作已完成".into())
+            })();
+            match result {
+                Ok(s) if !s.is_empty() => self.put(NOTICE, &s),
+                Err(e) => self.put(NOTICE, &format!("{e:#}")),
+                _ => {}
+            }
+            self.status();
+        }
+    }
+}
+pub fn state(c: &Config) -> Value {
+    let mut state =
+        config::load(&c.path.parent().unwrap().join("data/state.json")).unwrap_or(json!({}));
+    if config::now() - state["updated_at"].as_f64().unwrap_or(0.) > 10. {
+        state["running"] = false.into();
+    }
+    if state["running"] == true {
+        let pid = state["pid"].as_u64().unwrap_or(0) as u32;
+        if !native::Process::open(pid).is_ok_and(|p| {
+            p.image()
+                .is_ok_and(|image| PathBuf::from(image) == std::env::current_exe().unwrap())
+                && p.creation()
+                    .is_ok_and(|at| (at - state["created_at"].as_f64().unwrap_or(0.)).abs() < 0.01)
+        }) {
+            state["running"] = false.into();
+        }
+    }
+    state
+}
+fn start(c: &Config) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    if state(c)["running"] == true {
+        return Ok(());
+    }
+    c.binding()?;
+    let host = if c.host() == "0.0.0.0" {
+        "127.0.0.1"
+    } else {
+        c.host()
+    };
+    let addr = std::net::SocketAddr::new(host.parse()?, c.port());
+    if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+        bail!("端口已被占用，请先停止旧监听；未启动第二个发送端");
+    }
+    Command::new(std::env::current_exe()?)
+        .args(["--service", "--config"])
+        .arg(&c.path)
+        .args(["--gui-pid", &std::process::id().to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(0x08000000)
+        .spawn()?;
+    Ok(())
+}
+fn request_stop(c: &Config) -> Result<()> {
+    std::fs::create_dir_all(c.path.parent().unwrap().join("data"))?;
+    std::fs::write(c.path.parent().unwrap().join("data/stop.request"), b"stop")?;
+    Ok(())
+}
+fn stop_and_wait(c: &Config) -> Result<()> {
+    request_stop(c)?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(35);
+    while state(c)["running"] == true {
+        if std::time::Instant::now() >= deadline {
+            bail!("监听尚未完成停止，请稍后重试");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Ok(())
+}
+pub fn run(config: Config) -> Result<()> {
+    crate::lifecycle::note(&config, "gui_start", "设置窗口入口启动");
+    unsafe {
+        let no_activate = std::env::args().any(|s| s == "--no-activate");
+        let identity = config::contact_id(
+            &config
+                .path
+                .canonicalize()
+                .unwrap_or_else(|_| config.path.clone())
+                .to_string_lossy()
+                .to_lowercase(),
+        );
+        let mutex = config::wide(format!("Local\\WechatRedReplyRustGui-{identity}"));
+        let handle =
+            windows::Win32::System::Threading::CreateMutexW(None, false, PCWSTR(mutex.as_ptr()))?;
+        let _instance = native::Handle(handle);
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            let mut previous = HWND::default();
+            while let Ok(existing) =
+                FindWindowExW(None, Some(previous), w!("WechatRedReplyRustSettings"), None)
+            {
+                if existing.is_invalid() {
+                    break;
+                }
+                previous = existing;
+                if GetPropW(existing, w!("WechatRedReplyConfig")).0 as usize == identity as usize {
+                    if !no_activate {
+                        if IsIconic(existing).as_bool() {
+                            let _ = ShowWindow(existing, SW_RESTORE);
+                        }
+                        let _ = SetForegroundWindow(existing);
+                    }
+                    return Ok(());
+                }
+            }
+            bail!("设置窗口已经打开，请在任务栏查看");
+        }
+        InitCommonControlsEx(&INITCOMMONCONTROLSEX {
+            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as _,
+            dwICC: ICC_WIN95_CLASSES,
+        })
+        .ok()
+        .context("初始化 Windows 原生控件")?;
+        let module = GetModuleHandleW(None)?;
+        let class = w!("WechatRedReplyRustSettings");
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(proc),
+            hInstance: module.into(),
+            lpszClassName: class,
+            hCursor: LoadCursorW(None, IDC_ARROW)?,
+            hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as usize as _),
+            ..Default::default()
+        };
+        RegisterClassW(&wc);
+        let scale = GetDpiForSystem() as f64 / 96.;
+        let face = config::wide("Microsoft YaHei UI");
+        let font = CreateFontW(
+            (-16. * scale) as _,
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            DEFAULT_QUALITY,
+            DEFAULT_PITCH.0 as u32,
+            PCWSTR(face.as_ptr()),
+        );
+        let mut lf = LOGFONTW::default();
+        GetObjectW(
+            font.into(),
+            std::mem::size_of::<LOGFONTW>() as i32,
+            Some(&mut lf as *mut _ as _),
+        );
+        lf.lfHeight = (-22. * scale) as i32;
+        lf.lfWeight = 600;
+        let heading = CreateFontIndirectW(&lf);
+        let mut app = Box::new(App {
+            config,
+            controls: HashMap::new(),
+            pages: HashMap::new(),
+            page: 100,
+            root: HWND::default(),
+            font,
+            heading,
+            windows: vec![],
+            dirty: false,
+            loading: true,
+            scale,
+            work: None,
+            contacts: vec![],
+            log_filter: 311,
+            log_paused: false,
+            log_text: String::new(),
+        });
+        let (width, height) =
+            if cfg!(debug_assertions) && std::env::args().any(|s| s == "--gui-minimum") {
+                (1000., 740.)
+            } else {
+                (1040., 760.)
+            };
+        let h = CreateWindowExW(
+            if no_activate {
+                WS_EX_NOACTIVATE
+            } else {
+                WINDOW_EX_STYLE(0)
+            },
+            class,
+            w!("微信 · 红色问答 — Rust 独立版"),
+            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            (width * scale) as _,
+            (height * scale) as _,
+            None,
+            None,
+            Some(module.into()),
+            Some(&mut *app as *mut _ as _),
+        )?;
+        app.root = h;
+        SetPropW(
+            h,
+            w!("WechatRedReplyConfig"),
+            Some(HANDLE(identity as usize as _)),
+        )?;
+        app.init().context("初始化设置界面")?;
+        if no_activate {
+            let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+            let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+            SetWindowLongPtrW(
+                h,
+                GWL_EXSTYLE,
+                GetWindowLongPtrW(h, GWL_EXSTYLE) & !(WS_EX_NOACTIVATE.0 as isize),
+            );
+            SetWindowPos(
+                h,
+                Some(HWND_BOTTOM),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )?;
+        } else {
+            let _ = ShowWindow(h, SW_SHOW);
+        }
+        let _ = UpdateWindow(h);
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            if !IsDialogMessageW(h, &msg).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+        let _ = DeleteObject(app.font.into());
+        let _ = DeleteObject(app.heading.into());
+        Ok(())
+    }
+}
+unsafe extern "system" fn proc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    unsafe {
+        if msg == WM_NCCREATE {
+            let create = &*(l.0 as *const CREATESTRUCTW);
+            SetWindowLongPtrW(h, GWLP_USERDATA, create.lpCreateParams as isize);
+        }
+        let p = GetWindowLongPtrW(h, GWLP_USERDATA) as *mut App;
+        if !p.is_null() {
+            let app = &mut *p;
+            match msg {
+                WM_DPICHANGED => {
+                    let revised = (w.0 & 65535) as f64 / 96.;
+                    for heading in [false, true] {
+                        let old = if heading { app.heading } else { app.font };
+                        let mut lf = LOGFONTW::default();
+                        GetObjectW(
+                            old.into(),
+                            std::mem::size_of::<LOGFONTW>() as i32,
+                            Some(&mut lf as *mut _ as _),
+                        );
+                        lf.lfHeight = (-(if heading { 22. } else { 16. }) * revised) as i32;
+                        let new = CreateFontIndirectW(&lf);
+                        for (&id, &control) in &app.controls {
+                            if (id == 600) == heading {
+                                SendMessageW(
+                                    control,
+                                    WM_SETFONT,
+                                    Some(WPARAM(new.0 as usize)),
+                                    Some(LPARAM(1)),
+                                );
+                            }
+                        }
+                        if heading {
+                            app.heading = new;
+                        } else {
+                            app.font = new;
+                        }
+                        let _ = DeleteObject(old.into());
+                    }
+                    app.scale = revised;
+                    let r = &*(l.0 as *const RECT);
+                    let _ = SetWindowPos(
+                        h,
+                        None,
+                        r.left,
+                        r.top,
+                        r.right - r.left,
+                        r.bottom - r.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                    app.layout();
+                    return LRESULT(0);
+                }
+                WM_SIZE => {
+                    if !app.controls.is_empty() {
+                        app.layout();
+                    }
+                    return LRESULT(0);
+                }
+                WM_GETMINMAXINFO => {
+                    let m = &mut *(l.0 as *mut MINMAXINFO);
+                    m.ptMinTrackSize = POINT {
+                        x: (1000. * app.scale) as _,
+                        y: (740. * app.scale) as _,
+                    };
+                    return LRESULT(0);
+                }
+                WM_COMMAND => {
+                    app.command((w.0 & 65535) as i32, (w.0 >> 16) as u16);
+                    return LRESULT(0);
+                }
+                WM_TIMER => {
+                    app.status();
+                    return LRESULT(0);
+                }
+                WM_CLOSE => {
+                    crate::lifecycle::note(
+                        &app.config,
+                        "gui_close_request",
+                        "设置窗口收到 WM_CLOSE 关闭请求（消息不提供发起者身份）",
+                    );
+                    if app.dirty
+                        && MessageBoxW(
+                            Some(h),
+                            w!("关闭并放弃未保存修改？监听将继续运行。"),
+                            w!("关闭设置"),
+                            MB_YESNO | MB_ICONQUESTION,
+                        ) != IDYES
+                    {
+                        return LRESULT(0);
+                    }
+                    let _ = DestroyWindow(h);
+                    return LRESULT(0);
+                }
+                WM_QUERYENDSESSION => {
+                    crate::lifecycle::note(
+                        &app.config,
+                        "gui_session_query",
+                        "Windows 请求结束会话",
+                    );
+                    return LRESULT(1);
+                }
+                WM_ENDSESSION => {
+                    crate::lifecycle::note(
+                        &app.config,
+                        "gui_session_end",
+                        if w.0 != 0 {
+                            "Windows 正在结束会话"
+                        } else {
+                            "Windows 已取消结束会话"
+                        },
+                    );
+                }
+                WM_DESTROY => {
+                    crate::lifecycle::note(
+                        &app.config,
+                        "gui_destroy",
+                        "设置窗口已销毁；监听按设计继续运行",
+                    );
+                    PostQuitMessage(0);
+                    return LRESULT(0);
+                }
+                _ => {}
+            }
+        }
+        DefWindowProcW(h, msg, w, l)
+    }
+}
