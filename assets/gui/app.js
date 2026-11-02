@@ -170,7 +170,7 @@
   async function start() {
     try {
       await save(true);
-      const data = await api("start");
+      const data = await api("start", {});
       toast(data.notice || "监听正在启动");
       state.dirty = false;
       setTimeout(pollStatus, 600);
@@ -178,7 +178,7 @@
   }
   async function stop() {
     try {
-      const data = await api("stop");
+      const data = await api("stop", {});
       toast(data.notice || "正在停止监听");
       setTimeout(pollStatus, 600);
     } catch (error) { toast(error.message); }
@@ -188,7 +188,7 @@
     const button = $("#load-contacts");
     button.disabled = true; button.textContent = "正在读取…";
     try {
-      const data = await api("contacts");
+      const data = await api("contacts", {});
       state.contacts = data.contacts || [];
       const select = $("#contact-select");
       select.innerHTML = "";
@@ -228,10 +228,19 @@
   }
 
   async function loadLogs() {
+    const view = $("#log-text");
     try {
       const data = await api("logs?filter=" + state.filter);
-      $("#log-text").textContent = data.text || "尚无此类记录。";
-    } catch (error) { $("#log-text").textContent = error.message; }
+      const atBottom = view.scrollTop + view.clientHeight >= view.scrollHeight - 12;
+      const keep = view.scrollTop;
+      const next = data.text || "尚无此类记录。";
+      if (view.textContent !== next) {
+        view.textContent = next;
+        if (atBottom) view.scrollTop = view.scrollHeight;
+        else view.scrollTop = keep;
+      }
+      $("#log-count").textContent = `${view.textContent.split("\n").filter(Boolean).length} 行`;
+    } catch (error) { view.textContent = error.message; }
   }
   async function loadQueue() {
     try {
@@ -288,7 +297,7 @@
     });
     $("#copy-logs").addEventListener("click", () => copyText($("#log-text").textContent, "当前日志已复制"));
     $("#retry-friends").addEventListener("click", async () => {
-      try { const data = await api("retry-friends"); toast(data.notice || "已重新检查好友申请"); }
+      try { const data = await api("retry-friends", {}); toast(data.notice || "已重新检查好友申请"); }
       catch (error) { toast(error.message); }
     });
     $$("#page-account input, #page-account select, #page-scope textarea, #page-advanced input").forEach(el => {

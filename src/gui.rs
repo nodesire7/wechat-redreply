@@ -1330,8 +1330,17 @@ pub(crate) fn state(c: &Config) -> Value {
 }
 pub(crate) fn start(c: &Config) -> Result<()> {
     use std::os::windows::process::CommandExt;
-    if state(c)["running"] == true {
-        return Ok(());
+    let current = state(c);
+    if current["running"] == true {
+        if current["ready"] == true {
+            return Ok(());
+        }
+        let error = current["error"].as_str().unwrap_or("");
+        if error.contains("已变化") || error.contains("重启监听") {
+            stop_and_wait(c)?;
+        } else {
+            return Ok(());
+        }
     }
     c.binding()?;
     let host = if c.host() == "0.0.0.0" {
