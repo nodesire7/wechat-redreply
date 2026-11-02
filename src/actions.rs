@@ -1075,7 +1075,12 @@ impl Automation {
             self.select(h, &record.name, record.group)?;
         }
         let mut errors = vec![];
-        for tracked in record.messages.iter().rev() {
+        let mut ordered = record.messages.iter().collect::<Vec<_>>();
+        // Revoke media before text. After the first revoke, WeChat inserts a
+        // system notice and may move the viewport; the image menu is the same
+        // message menu, but its row is easier to lose than a text bubble.
+        ordered.sort_by_key(|m| m.row.kind == 1);
+        for tracked in ordered {
             if tracked.was_recalled() {
                 continue;
             }
@@ -1094,6 +1099,10 @@ impl Automation {
                         tracked.sent_at,
                     );
                 }
+                // Re-select the chat before every physical message. A successful
+                // revoke inserts a system row and can move the viewport; without
+                // this reset the next (often last) message opens no menu.
+                self.select(h, &record.name, record.group)?;
                 let row = self.locate_message(shared, h, &record.name, &tracked.row.key())?;
                 if config::now() - tracked.sent_at >= recall_limit(&c.raw)
                     || shared.stop.load(std::sync::atomic::Ordering::SeqCst)
