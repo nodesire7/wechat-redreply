@@ -9,6 +9,7 @@ mod diagnostics;
 mod friends;
 mod gui;
 mod gui_clipboard;
+mod gui_web;
 mod lifecycle;
 mod maintenance;
 mod message_view;

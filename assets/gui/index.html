@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>微信 · 红色问答</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="shell">
+  <header id="titlebar">
+    <div class="brand" id="dragRegion">
+      <img class="brand-avatar" src="/avatar.png" alt="">
+      <span>微信 · 红色问答</span>
+    </div>
+    <div class="window-controls">
+      <button class="wc" data-window="minimize" aria-label="最小化"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button>
+      <button class="wc" data-window="maximize" aria-label="最大化"><svg viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11"/></svg></button>
+      <button class="wc close" data-window="close" aria-label="关闭"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></button>
+    </div>
+  </header>
+
+  <aside id="sidebar">
+    <nav id="nav">
+      <button class="nav-item" data-page="account">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="7" r="3.2"/><path d="M5 21v-3.2c0-3 2.4-4.8 7-4.8s7 1.8 7 4.8V21"/></svg>
+        <span>账号与接入</span>
+      </button>
+      <button class="nav-item" data-page="scope">
+        <svg viewBox="0 0 24 24"><circle cx="8.5" cy="7" r="2.8"/><circle cx="17" cy="9" r="2.4"/><path d="M2.5 21v-3c0-2.8 2-4.5 6-4.5s6 1.7 6 4.5v3M16 14.2c3.4 0 5.5 1.5 5.5 4.2V21"/></svg>
+        <span>接管范围</span>
+      </button>
+      <button class="nav-item" data-page="queue">
+        <svg viewBox="0 0 24 24"><path d="m3 11 18-8-8 18-2.2-7.8L3 11Z"/><path d="m11 13 10-10"/></svg>
+        <span>发送队列</span>
+      </button>
+      <button class="nav-item" data-page="logs">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 22l2-4M17 22l-2-4M7 9h10M7 13h6"/></svg>
+        <span>日志与对话</span>
+      </button>
+      <button class="nav-item" data-page="advanced">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>
+        <span>高级设置</span>
+      </button>
+    </nav>
+    <div id="sidebar-status" class="sidebar-status"><span class="dot"></span><span id="sidebar-status-text">正在读取…</span></div>
+  </aside>
+
+  <main id="workspace">
+    <div id="pane">
+      <section class="page active" id="page-account">
+        <div class="page-head">
+          <h1>账号与接入</h1>
+          <p class="subtitle">绑定微信，并连接你的红色问答</p>
+        </div>
+        <div class="state-row">
+          <span class="state"><i id="wechat-dot" class="dot"></i><span id="wechat-state">微信 未绑定</span></span>
+          <span class="state"><i id="red-dot" class="dot"></i><span id="red-state">RedReply 未连接</span></span>
+        </div>
+
+        <section class="account-card">
+          <div class="identity">
+            <div class="avatar"><svg viewBox="0 0 24 24"><circle cx="12" cy="7.5" r="3.4"/><path d="M5 21v-3.4c0-3.1 2.4-5 7-5s7 1.9 7 5V21"/></svg></div>
+            <div class="identity-copy">
+              <h2>微信账号</h2>
+              <span class="pill" id="binding-pill">未绑定</span>
+              <p class="muted" id="binding-note">只绑定你明确选择的微信账号</p>
+            </div>
+          </div>
+          <div class="card-split"></div>
+          <div class="bind-area">
+            <label class="field-label" for="window-select">选择已登录的微信窗口</label>
+            <div class="bind-row">
+              <select id="window-select" class="select"><option value="">请选择微信窗口</option></select>
+              <button class="btn secondary" id="refresh-windows">
+                <svg viewBox="0 0 24 24"><path d="M20 8a8 8 0 1 0 1 6"/><path d="M20 3v5h-5"/></svg>
+                刷新窗口
+              </button>
+              <button class="btn primary" id="bind-account">
+                <svg viewBox="0 0 24 24"><path d="M8 14l-3 3v4h4l9-9"/><path d="M14 6l4 4M9 5l10 10"/></svg>
+                绑定账号
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <h2 class="section-title">RedReply 连接</h2>
+        <div class="form-grid">
+          <div class="field span4"><label for="listen-host">监听 IP</label><input id="listen-host" autocomplete="off"></div>
+          <div class="field span4"><label for="connect-host">连接地址</label><input id="connect-host" autocomplete="off"></div>
+          <div class="field span4"><label for="port">端口</label><input id="port" inputmode="numeric" autocomplete="off"></div>
+          <div class="field span6"><label for="self-id">机器人 ID</label><input id="self-id" inputmode="numeric" autocomplete="off"></div>
+          <div class="field span6"><label for="token">接入令牌</label><div class="token-wrap"><input id="token" type="password" autocomplete="off"><button class="icon-btn" id="reveal-token" aria-label="显示令牌"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6"/></svg></button></div></div>
+          <div class="field span9"><label for="management-url">RedReply 管理地址</label><input id="management-url" autocomplete="off"></div>
+          <div class="field span3 copy-field"><button class="btn secondary wide" id="copy-url"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M4 16V4h12"/></svg>复制 OneBot 地址</button></div>
+        </div>
+
+        <details class="wss" id="wss">
+          <summary><svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg>WSS 证书与私钥（可选）</summary>
+          <div class="wss-grid">
+            <div class="field"><label for="tls-cert">WSS 证书</label><input id="tls-cert" autocomplete="off"></div>
+            <div class="field"><label for="tls-key">WSS 私钥</label><input id="tls-key" autocomplete="off"></div>
+          </div>
+        </details>
+
+        <div class="page-footer">
+          <div class="footer-left">
+            <div class="actions">
+              <button class="btn secondary start" id="start-btn"><svg viewBox="0 0 24 24"><path d="M8 4l12 8-12 8V4Z"/></svg>启动监听</button>
+              <button class="btn secondary hidden" id="stop-btn"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12"/></svg>停止监听</button>
+              <span class="notice inline" id="notice">绑定微信账号后即可启动监听。</span>
+            </div>
+          </div>
+          <div class="footer-right">
+            <button class="btn secondary" id="reload-btn"><svg viewBox="0 0 24 24"><path d="M20 8a8 8 0 1 0 1 6"/><path d="M20 3v5h-5"/></svg>重新载入</button>
+            <button class="btn primary" id="save-btn"><svg viewBox="0 0 24 24"><path d="M5 3h12l4 4v14H3V3h2Z"/><path d="M7 3v7h10V3M7 21v-7h10v7"/></svg>保存并应用</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="page" id="page-scope">
+        <div class="page-head"><h1>接管范围</h1><p class="subtitle">选择允许红色问答接管的私聊和群聊</p><p class="muted">每行一个完整备注名或群名；空列表表示不接管该类会话。</p></div>
+        <div class="picker-row">
+          <select id="contact-select" class="select"><option value="">读取联系人后选择</option></select>
+          <button class="btn secondary" id="load-contacts">读取联系人</button>
+          <button class="btn secondary" id="add-whitelist">加入白名单</button>
+          <button class="btn secondary" id="copy-contact-id">复制选中 ID</button>
+        </div>
+        <div class="scope-grid">
+          <div><h2 class="list-title">私聊白名单</h2><textarea id="whitelist" class="list" spellcheck="false"></textarea></div>
+          <div><h2 class="list-title">群聊白名单</h2><textarea id="group-whitelist" class="list" spellcheck="false"></textarea></div>
+        </div>
+        <p class="muted scope-note" id="scope-ids"></p>
+        <div class="page-footer">
+          <div class="footer-left"><p class="notice" id="scope-notice">私聊与群聊分开路由；群成员身份单独映射。</p><div class="actions"><button class="btn secondary" id="scope-start">启动监听</button></div></div>
+          <div class="footer-right"><button class="btn secondary" data-save>保存并应用</button></div>
+        </div>
+      </section>
+
+      <section class="page" id="page-queue">
+        <div class="page-head"><h1>发送队列</h1><p class="subtitle">查看已入队回复的实际发送和撤回结果</p><p class="queue-stats" id="queue-stats">发送队列：正在读取…</p></div>
+        <pre class="log-view" id="queue-text">正在读取…</pre>
+        <div class="page-footer"><div class="footer-left"><p class="notice">已入队不等于微信已发出；每次输出拆分的消息共用一个撤回范围。</p></div><div class="footer-right"><button class="btn secondary" id="queue-refresh">刷新</button></div></div>
+      </section>
+
+      <section class="page" id="page-logs">
+        <div class="page-head"><h1>日志与对话</h1><p class="subtitle">保留消息原文，核对每一次收发</p></div>
+        <div class="filters">
+          <button class="filter active" data-filter="311">全部</button>
+          <button class="filter" data-filter="312">对话记录</button>
+          <button class="filter" data-filter="313">协议明细</button>
+          <button class="filter" data-filter="314">运行状态</button>
+          <button class="filter" data-filter="318">发送队列</button>
+          <button class="filter right" id="pause-logs">暂停刷新</button>
+          <button class="filter right" id="copy-logs">复制当前日志</button>
+        </div>
+        <pre class="log-view" id="log-text">正在读取…</pre>
+        <div class="page-footer"><div class="footer-left"><p class="notice">收发原文、成员、目标、回包和耗时；图片只记录摘要，令牌自动隐藏。</p></div></div>
+      </section>
+
+      <section class="page" id="page-advanced">
+        <div class="page-head"><h1>高级设置</h1><p class="subtitle">自动识别优先，需要时再调整</p></div>
+        <div class="advanced-grid">
+          <div class="field"><label for="interval">数据库查询间隔（秒）</label><input id="interval" inputmode="decimal"></div>
+          <div class="field"><label for="recall-limit">撤回上限（秒，最多 120）</label><input id="recall-limit" inputmode="numeric"></div>
+          <div class="field span2"><label for="staging-chat">合并转发中转自聊</label><input id="staging-chat" placeholder="自动识别当前账号，留空即可"></div>
+          <label class="check span2"><input type="checkbox" id="friend-accept"><span>自动同意好友申请，权限仅聊天</span></label>
+          <button class="btn secondary" id="retry-friends">重新检查好友申请</button>
+          <p class="muted span2">离屏模式已启用：窗口放在所有显示器之外，不最小化。自动收发不访问剪贴板、不移动鼠标、不抢前台。</p>
+          <p class="muted span2">配置、日志、缓存位于 EXE 旁；迁移后需要重新绑定微信。引用和艾特转换为正文，语音、文件暂不支持。</p>
+        </div>
+        <div class="page-footer"><div class="footer-left"><p class="notice">高级设置保存后会热更新；连接参数和绑定变化会重启监听。</p></div><div class="footer-right"><button class="btn secondary" data-save>保存并应用</button></div></div>
+      </section>
+
+      <div id="toast" class="toast hidden"></div>
+    </div>
+  </main>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

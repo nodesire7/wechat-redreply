@@ -8,7 +8,7 @@ pub const SIDE: COLORREF = COLORREF(0x00fbf2e6);
 pub const WHITE: COLORREF = COLORREF(0x00ffffff);
 pub const LINE: COLORREF = COLORREF(0x00e3dcd5);
 pub const DOT: COLORREF = COLORREF(0x00a89a8c);
-pub const PANE_TOP: i32 = 16;
+pub const PANE_TOP: i32 = 47;
 pub unsafe extern "system" fn button_proc(
     h: HWND,
     msg: u32,
@@ -91,7 +91,14 @@ pub unsafe fn rounded(dc: HDC, r: RECT, fill: COLORREF, border: COLORREF, radius
         let _ = DeleteObject(pen.into());
     }
 }
-unsafe fn text(dc: HDC, r: RECT, s: &str, font: HFONT, color: COLORREF, flags: DRAW_TEXT_FORMAT) {
+pub unsafe fn text(
+    dc: HDC,
+    r: RECT,
+    s: &str,
+    font: HFONT,
+    color: COLORREF,
+    flags: DRAW_TEXT_FORMAT,
+) {
     unsafe {
         let old = SelectObject(dc, font.into());
         SetBkMode(dc, TRANSPARENT);
@@ -212,6 +219,16 @@ pub unsafe fn icon(dc: HDC, id: i32, x: i32, y: i32, size: i32, color: COLORREF)
                 ellipse(8, 8, 16, 16);
             }
             319 => line(&[(9, 5), (16, 12), (9, 19)]),
+            650 => line(&[(5, 12), (19, 12)]),
+            651 => {
+                let (a, b) = p(6, 6);
+                let (c, d) = p(18, 18);
+                let _ = Rectangle(dc, a, b, c, d);
+            }
+            652 => {
+                line(&[(6, 6), (18, 18)]);
+                line(&[(18, 6), (6, 18)]);
+            }
             _ => {}
         }
         SelectObject(dc, old_brush);
@@ -225,6 +242,45 @@ pub unsafe fn draw_button(app: &App, d: &DRAWITEMSTRUCT) {
         let dc = d.hDC;
         let r = d.rcItem;
         let s = app.scale;
+        if (650..=652).contains(&id) {
+            let hot = !GetPropW(d.hwndItem, w!("WechatRedReplyHot")).is_invalid();
+            let pressed = d.itemState.0 & ODS_SELECTED.0 != 0;
+            let close = id == 652;
+            let fill = if close && (hot || pressed) {
+                COLORREF(0x002525c9)
+            } else if hot || pressed {
+                COLORREF(0x00faead7)
+            } else {
+                SIDE
+            };
+            let brush = CreateSolidBrush(fill);
+            FillRect(dc, &r, brush);
+            let _ = DeleteObject(brush.into());
+            icon(
+                dc,
+                id,
+                (r.left + r.right - (18. * s) as i32) / 2,
+                (r.top + r.bottom - (18. * s) as i32) / 2,
+                (18. * s) as i32,
+                if close && (hot || pressed) {
+                    WHITE
+                } else {
+                    INK
+                },
+            );
+            if d.itemState.0 & ODS_FOCUS.0 != 0 {
+                let _ = DrawFocusRect(
+                    dc,
+                    &rect(
+                        r.left + 4,
+                        r.top + 4,
+                        r.right - r.left - 8,
+                        r.bottom - r.top - 8,
+                    ),
+                );
+            }
+            return;
+        }
         if id == 403 {
             let selected =
                 d.itemState.0 & ODS_SELECTED.0 != 0 && d.itemState.0 & ODS_COMBOBOXEDIT.0 == 0;
@@ -434,17 +490,30 @@ pub unsafe fn paint(app: &App, dc: HDC) {
         icon(
             dc,
             631,
-            (22. * s) as i32,
-            (22. * s) as i32,
-            (23. * s) as i32,
+            (24. * s) as i32,
+            (8. * s) as i32,
+            (20. * s) as i32,
             INK,
+        );
+        text(
+            dc,
+            rect(
+                (52. * s) as i32,
+                (6. * s) as i32,
+                (260. * s) as i32,
+                (28. * s) as i32,
+            ),
+            "微信 · 红色问答",
+            app.font,
+            INK,
+            DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
         );
         let x = ((side + 28) as f64 * s) as i32;
         if app.page == 101 {
             let card = app.account_rect();
             let r = rect(
                 (card.left as f64 * s) as i32,
-                (card.top as f64 * s) as i32,
+                ((card.top + super::CHROME_TOP) as f64 * s) as i32,
                 ((card.right - card.left) as f64 * s) as i32,
                 ((card.bottom - card.top) as f64 * s) as i32,
             );
@@ -493,7 +562,8 @@ pub unsafe fn paint(app: &App, dc: HDC) {
             let old = SelectObject(dc, brush.into());
             let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
             for x in [x + (9. * s) as i32, x + (214. * s) as i32] {
-                let y = (134. * app.vertical() * s) as i32 + (14. * s) as i32;
+                let y = ((super::CHROME_TOP as f64 + 134. * app.vertical()) * s) as i32
+                    + (14. * s) as i32;
                 let _ = Ellipse(dc, x, y, x + dot, y + dot);
             }
             SelectObject(dc, old_pen);

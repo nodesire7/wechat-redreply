@@ -884,30 +884,62 @@ impl Automation {
                 bail!("目标消息不在已验证可操作区域，未操作其他消息");
             }
             let picture = crate::native::capture(h)?;
+            let mut image = None;
+            let mut image_area = 0i64;
+            for node in self.descendants(row).unwrap_or_default() {
+                if node.CurrentControlType().ok() != Some(UIA_ImageControlTypeId) {
+                    continue;
+                }
+                let Ok(r) = node.CurrentBoundingRectangle() else {
+                    continue;
+                };
+                if r.right <= r.left || r.bottom <= r.top {
+                    continue;
+                }
+                let area = (r.right - r.left) as i64 * (r.bottom - r.top) as i64;
+                if image.is_none() || area > image_area {
+                    image = Some(r);
+                    image_area = area;
+                }
+            }
             let mut sum = 0u64;
             let mut count = 0u64;
-            for y in (rect.top.max(list.top) - window.top).max(0)
-                ..(rect.bottom.min(list.bottom) - window.top).min(picture.height() as i32)
-            {
-                for x in (rect.left - window.left).max(0)
-                    ..(rect.right - window.left).min(picture.width() as i32)
+            if image.is_none() {
+                for y in (rect.top.max(list.top) - window.top).max(0)
+                    ..(rect.bottom.min(list.bottom) - window.top).min(picture.height() as i32)
                 {
-                    let p = picture.get_pixel(x as _, y as _);
-                    if p[1] as i32 > p[0] as i32 + 18 && p[1] as i32 > p[2] as i32 + 18 && p[1] > 45
+                    for x in (rect.left - window.left).max(0)
+                        ..(rect.right - window.left).min(picture.width() as i32)
                     {
-                        sum += x as u64;
-                        count += 1;
+                        let p = picture.get_pixel(x as _, y as _);
+                        if p[1] as i32 > p[0] as i32 + 18
+                            && p[1] as i32 > p[2] as i32 + 18
+                            && p[1] > 45
+                        {
+                            sum += x as u64;
+                            count += 1;
+                        }
                     }
                 }
             }
-            let x = if count > 20 {
-                (sum / count) as i32 + window.left - origin.x
+            let (x, y) = if let Some(r) = image {
+                (
+                    (r.left + r.right) / 2 - origin.x,
+                    (r.top + r.bottom) / 2 - origin.y,
+                )
+            } else if count > 20 {
+                (
+                    (sum / count) as i32 + window.left - origin.x,
+                    (rect.top.max(list.top) + rect.bottom.min(list.bottom)) / 2 - origin.y,
+                )
             } else {
-                // All callers correlate an outgoing row with an acknowledged
-                // own database message. Cards/images have no green bubble.
-                rect.right - 140 - origin.x
+                // Cards without an exposed image child use the acknowledged
+                // outgoing row; never click the blank area outside the bubble.
+                (
+                    rect.right.min(list.right) - ((rect.right - rect.left) / 3).max(120) - origin.x,
+                    (rect.top.max(list.top) + rect.bottom.min(list.bottom)) / 2 - origin.y,
+                )
             };
-            let y = (rect.top.max(list.top) + rect.bottom.min(list.bottom)) / 2 - origin.y;
             for (msg, key) in [(WM_MOUSEMOVE, 0), (WM_RBUTTONDOWN, 2), (WM_RBUTTONUP, 0)] {
                 PostMessageW(
                     Some(h),
@@ -920,6 +952,26 @@ impl Automation {
             std::thread::sleep(Duration::from_millis(120));
             Ok(())
         }
+    }
+    fn recall_menu_item(&self, h: HWND) -> Result<IUIAutomationElement> {
+        for popup in crate::native::thread_windows(h) {
+            let root = self.root(popup)?;
+            for node in self.descendants(&root)? {
+                let matched = unsafe {
+                    node.CurrentControlType().ok() == Some(UIA_MenuItemControlTypeId)
+                        && node
+                            .CurrentName()
+                            .is_ok_and(|name| name.to_string().contains("撤回"))
+                        && node
+                            .CurrentIsEnabled()
+                            .is_ok_and(|enabled| enabled.as_bool())
+                };
+                if matched {
+                    return Ok(node);
+                }
+            }
+        }
+        bail!("原生操作【撤回】不可用")
     }
     fn action_roots(&self, h: HWND) -> Result<Vec<IUIAutomationElement>> {
         let mut roots = vec![self.root(h)?];
@@ -1023,7 +1075,7 @@ impl Automation {
             self.select(h, &record.name, record.group)?;
         }
         let mut errors = vec![];
-        for tracked in &record.messages {
+        for tracked in record.messages.iter().rev() {
             if tracked.was_recalled() {
                 continue;
             }
@@ -1059,7 +1111,9 @@ impl Automation {
                         rows.push(tracked.row.clone());
                     }
                 }
-                let action = self.named_action(h, "撤回")?;
+                let action = self
+                    .named_action(h, "撤回")
+                    .or_else(|_| self.recall_menu_item(h))?;
                 self.click_native(&action, h)?;
                 std::thread::sleep(Duration::from_millis(150));
                 // Some builds ask for confirmation. Only invoke an explicit recall

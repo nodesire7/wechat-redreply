@@ -1,6 +1,6 @@
 [package]
 name = "wechat-redreply"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "Apache-2.0"
 description = "Standalone Windows WeChat OneBot11 adapter for an existing RedReply"
@@ -36,6 +36,8 @@ rustls-pemfile = "2"
 futures-util = { version = "0.3", features = ["sink"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Memory", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_System_LibraryLoader", "Win32_System_DataExchange", "Win32_Storage_FileSystem", "Win32_Storage_Xps", "Win32_Security_Cryptography", "Win32_Security", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Shell"] }
+wry = "0.57.1"
+tao = "0.37.2"
 
 [features]
 default = []
@@ -48,3 +50,6 @@ lto = "thin"
 codegen-units = 1
 strip = true
 panic = "unwind"
+
+[build-dependencies]
+winres = "0.1.12"

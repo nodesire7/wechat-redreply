@@ -53,6 +53,33 @@ impl Store {
         if present == 0 {
             db.execute("ALTER TABLE batches ADD COLUMN workflow_until REAL", [])?;
         }
+        for (name, sql) in [
+            (
+                "recall_delay",
+                "ALTER TABLE jobs ADD COLUMN recall_delay REAL",
+            ),
+            (
+                "recall_requested",
+                "ALTER TABLE jobs ADD COLUMN recall_requested INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "recall_status",
+                "ALTER TABLE jobs ADD COLUMN recall_status TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "recall_error",
+                "ALTER TABLE jobs ADD COLUMN recall_error TEXT NOT NULL DEFAULT ''",
+            ),
+        ] {
+            let present: i64 = db.query_row(
+                "SELECT count(*) FROM pragma_table_info('jobs') WHERE name=?1",
+                [name],
+                |r| r.get(0),
+            )?;
+            if present == 0 {
+                db.execute(sql, [])?;
+            }
+        }
         Ok(Self { db })
     }
 }
@@ -208,26 +235,13 @@ pub fn enqueue(shared: &Shared, c: &Config, request: &Value) -> Result<Value> {
             .map(|s| trigger_batch(&identity, group, &name, s))
             .unwrap_or_else(|| output_batch(&identity, group, &name, id));
         tx.execute("INSERT OR IGNORE INTO batches(batch_id,account,name,is_group,source) VALUES(?1,?2,?3,?4,?5)",params![batch,identity,name,group,source])?;
-        let state: String = tx.query_row(
-            "SELECT status FROM batches WHERE batch_id=?1",
-            [&batch],
-            |r| r.get(0),
-        )?;
-        let cancel: bool = tx.query_row(
-            "SELECT recall_requested FROM batches WHERE batch_id=?1",
-            [&batch],
-            |r| r.get(0),
-        )?;
-        if state != "active" || cancel {
-            bail!("该触发批次已请求撤回，未追加发送");
-        }
         tx.execute("INSERT INTO jobs(id,batch_id,account,name,is_group,request,status,enqueued) VALUES(?1,?2,?3,?4,?5,?6,'queued',?7)",params![id,batch,identity,name,group,raw,config::now()])?;
         tx.commit()?;
         Ok(json!({
             "message_id":id,
             "batch_id":batch,
             "trigger_id":source,
-            "recall_scope":"trigger",
+            "recall_scope":"output",
             "delivery_status":"queued",
             "confirmed_sent":false
         }))
@@ -326,7 +340,7 @@ pub fn resume_friends(data: &Path) -> Result<()> {
 }
 pub fn status(shared: &Shared, id: u64) -> Result<Option<Value>> {
     store(shared, |s| {
-        Ok(s.db.query_row("SELECT j.id,j.batch_id,j.name,j.is_group,j.status,j.enqueued,j.started,j.finished,j.error,b.source FROM jobs j JOIN batches b ON b.batch_id=j.batch_id WHERE j.id=?1",[id],|r|Ok(json!({"message_id":r.get::<_,u64>(0)?,"batch_id":r.get::<_,String>(1)?,"session":r.get::<_,String>(2)?,"group":r.get::<_,bool>(3)?,"delivery_status":r.get::<_,String>(4)?,"enqueued_at":r.get::<_,f64>(5)?,"started_at":r.get::<_,Option<f64>>(6)?,"finished_at":r.get::<_,Option<f64>>(7)?,"error":r.get::<_,String>(8)?,"trigger_id":r.get::<_,String>(9)?,"recall_scope":"trigger"}))).optional()?)
+        Ok(s.db.query_row("SELECT j.id,j.batch_id,j.name,j.is_group,j.status,j.enqueued,j.started,j.finished,j.error,b.source,j.recall_delay,j.recall_requested,j.recall_status,j.recall_error FROM jobs j JOIN batches b ON b.batch_id=j.batch_id WHERE j.id=?1",[id],|r|Ok(json!({"message_id":r.get::<_,u64>(0)?,"batch_id":r.get::<_,String>(1)?,"session":r.get::<_,String>(2)?,"group":r.get::<_,bool>(3)?,"delivery_status":r.get::<_,String>(4)?,"enqueued_at":r.get::<_,f64>(5)?,"started_at":r.get::<_,Option<f64>>(6)?,"finished_at":r.get::<_,Option<f64>>(7)?,"error":r.get::<_,String>(8)?,"trigger_id":r.get::<_,String>(9)?,"recall_delay":r.get::<_,Option<f64>>(10)?,"recall_requested":r.get::<_,bool>(11)?,"recall_status":r.get::<_,String>(12)?,"recall_error":r.get::<_,String>(13)?,"recall_scope":"output"}))).optional()?)
     })
 }
 pub fn recover(shared: &Shared) -> Result<()> {
@@ -336,7 +350,7 @@ pub fn recover(shared: &Shared) -> Result<()> {
             [],
         )?;
         let b=s.db.execute("UPDATE jobs SET status='uncertain',error='程序在原生发送阶段中断；可能已发送，未自动重发',finished=?1 WHERE status='sending'",[config::now()])?;
-        s.db.execute("UPDATE batches SET status='recall_failed',error='撤回期间程序中断；请核对原消息' WHERE status='recalling'",[])?;
+        s.db.execute("UPDATE jobs SET recall_status='recall_failed',recall_error='撤回期间程序中断；请核对原消息' WHERE recall_status='recalling'",[])?;
         Ok((a, b))
     })?;
     shared.log(&format!(
@@ -359,7 +373,7 @@ fn claim(shared: &Shared) -> Result<Option<Entry>> {
     let identity = account(shared)?;
     store(shared, |s| {
         let tx = s.db.transaction()?;
-        let e=tx.query_row("SELECT j.id,j.batch_id,j.account,j.name,j.is_group,j.request FROM jobs j JOIN batches b ON b.batch_id=j.batch_id WHERE j.status='queued' AND j.account=?1 AND b.status='active' AND b.recall_requested=0 ORDER BY j.id LIMIT 1",[identity],entry).optional()?;
+        let e=tx.query_row("SELECT j.id,j.batch_id,j.account,j.name,j.is_group,j.request FROM jobs j WHERE j.status='queued' AND j.account=?1 AND j.recall_requested=0 ORDER BY j.id LIMIT 1",[identity],entry).optional()?;
         if let Some(e) = &e {
             tx.execute(
                 "UPDATE jobs SET status='preparing',started=?1 WHERE id=?2",
@@ -389,52 +403,54 @@ pub fn request_recall(shared: &Shared, id: u64, delay: Option<f64>) -> Result<Op
     store(shared, |s| {
         let tx = s.db.transaction()?;
         if let Some(delay) = seconds {
-            tx.execute("UPDATE batches SET delay=CASE WHEN delay IS NULL THEN ?1 ELSE min(delay,?1) END WHERE batch_id=?2",params![delay,batch])?;
+            tx.execute("UPDATE jobs SET recall_delay=CASE WHEN recall_delay IS NULL THEN ?1 ELSE min(recall_delay,?1) END,recall_status=CASE WHEN recall_status='' THEN 'scheduled' ELSE recall_status END WHERE id=?2",params![delay,id])?;
         } else {
             tx.execute(
-                "UPDATE batches SET recall_requested=1 WHERE batch_id=?1",
-                [&batch],
+                "UPDATE jobs SET recall_requested=1,recall_status='requested' WHERE id=?1",
+                [id],
             )?;
-            tx.execute("UPDATE jobs SET status='cancelled',error='该触发已请求统一撤回，取消尚未发送内容',finished=?1 WHERE batch_id=?2 AND status IN ('queued','preparing')",params![config::now(),batch])?;
+            tx.execute("UPDATE jobs SET status='cancelled',error='该次输出已请求撤回，取消尚未发送内容',finished=?1,recall_status='cancelled' WHERE id=?2 AND status IN ('queued','preparing')",params![config::now(),id])?;
         }
         tx.commit()?;
         Ok(())
     })?;
     shared.log(&format!(
-        "触发撤回已登记：消息ID={id}，触发批次={batch}，延迟={seconds:?}秒；整次触发的图片、文字和通知统一撤回"
+        "输出撤回已登记：消息ID={id}，触发={batch}，延迟={seconds:?}秒；只撤回该次输出的全部拆分消息"
     ));
     Ok(Some(
-        json!({"message_id":id,"batch_id":batch,"recall_status":"queued","delay_seconds":seconds,"recall_scope":"trigger","trigger_id":item["trigger_id"]}),
+        json!({"message_id":id,"batch_id":batch,"recall_status":"queued","delay_seconds":seconds,"recall_scope":"output","trigger_id":item["trigger_id"]}),
     ))
 }
-fn batch_ids(shared: &Shared, batch: &str) -> Result<Vec<u64>> {
-    store(shared, |s| {
-        let mut q =
-            s.db.prepare("SELECT id FROM jobs WHERE batch_id=?1 ORDER BY id")?;
-        Ok(q.query_map([batch], |r| r.get(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?)
-    })
-}
-fn deadline(shared: &Shared, batch: &str, delay: f64) -> Result<Option<f64>> {
-    let ids = batch_ids(shared, batch)?;
-    let pending = store(shared, |s| {
-        Ok(s.db.query_row("SELECT (SELECT count(*) FROM jobs WHERE batch_id=?1 AND status IN ('queued','preparing','sending')),COALESCE(workflow_until,0) FROM batches WHERE batch_id=?1",[batch],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,f64>(1)?)))?)
-    })?;
+fn due_at(shared: &Shared, id: u64, delay: f64) -> Result<Option<f64>> {
     let ledger = shared.ledger.lock().unwrap();
-    let mut times = ids
+    let Some(record) = ledger.sent.get(&id) else {
+        return Ok(None);
+    };
+    let mut times = record
+        .messages
         .iter()
-        .filter_map(|id| ledger.sent.get(id))
-        .flat_map(|r| r.messages.iter())
         .map(|m| m.sent_at)
         .collect::<Vec<_>>();
+    if times.is_empty() {
+        return Ok(None);
+    }
+    times.sort_by(f64::total_cmp);
+    let last = *times.last().unwrap();
     let cap = crate::actions::recall_limit(&shared.config.read().unwrap().raw);
-    Ok(batch_deadline(&mut times, delay, cap, pending.0 > 0))
+    let hard = times
+        .iter()
+        .enumerate()
+        .map(|(i, at)| at + cap - 3. * (i + 1) as f64)
+        .min_by(f64::total_cmp)
+        .unwrap();
+    Ok(Some(
+        (last + delay.min(cap) - (delay.min(cap) * 0.1).min(3.)).min(hard),
+    ))
 }
+#[cfg(test)]
 fn batch_deadline(times: &mut [f64], delay: f64, cap: f64, pending: bool) -> Option<f64> {
     times.sort_by(f64::total_cmp);
     let last = *times.last()?;
-    // Reserve native work for every child, rather than leaving three seconds
-    // for an arbitrarily large batch. Oldest messages are recalled first.
     let hard = times
         .iter()
         .enumerate()
@@ -448,19 +464,28 @@ fn batch_deadline(times: &mut [f64], delay: f64, cap: f64, pending: bool) -> Opt
 }
 pub fn cancelled(shared: &Shared, id: u64) -> Result<bool> {
     let value = store(shared, |s| {
-        Ok(s.db.query_row("SELECT b.batch_id,b.recall_requested,b.status,b.delay,j.status FROM jobs j JOIN batches b ON b.batch_id=j.batch_id WHERE j.id=?1",[id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,bool>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<f64>>(3)?,r.get::<_,String>(4)?))).optional()?)
+        Ok(s.db.query_row("SELECT status,recall_delay,recall_requested,recall_status,enqueued FROM jobs WHERE id=?1",[id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<f64>>(1)?,r.get::<_,bool>(2)?,r.get::<_,String>(3)?,r.get::<_,f64>(4)?))).optional()?)
     })?;
-    let Some((batch, cancel, state, delay, job)) = value else {
+    let Some((state, delay, requested, recall_status, enqueued)) = value else {
         return Ok(false);
     };
-    Ok(cancel
-        || state != "active"
-        || job == "cancelled"
-        || if let Some(d) = delay {
-            deadline(shared, &batch, d)?.is_some_and(|due| due <= config::now())
-        } else {
-            false
-        })
+    if state == "cancelled"
+        || requested
+        || matches!(
+            recall_status.as_str(),
+            "requested" | "recalling" | "cancelled"
+        )
+    {
+        return Ok(true);
+    }
+    if let Some(delay) = delay {
+        if state == "queued" || state == "preparing" {
+            let cap = crate::actions::recall_limit(&shared.config.read().unwrap().raw);
+            return Ok(config::now() >= enqueued + delay.min(cap) - 3.);
+        }
+        return Ok(due_at(shared, id, delay)?.is_some_and(|due| due <= config::now()));
+    }
+    Ok(false)
 }
 pub fn summary(shared: &Shared) -> Result<Value> {
     store(shared, |s| {
@@ -544,7 +569,7 @@ pub(crate) fn process_one_with(
         }
     };
     if cancelled(shared, e.id)? {
-        finish(shared, e.id, "cancelled", "批次已撤回，未发送")?;
+        finish(shared, e.id, "cancelled", "该次输出已撤回，未发送")?;
         return Ok(true);
     }
     if shared.stop.load(Ordering::SeqCst) {
@@ -552,7 +577,7 @@ pub(crate) fn process_one_with(
         return Ok(true);
     }
     let started = store(shared, |s| {
-        Ok(s.db.execute("UPDATE jobs SET status='sending' WHERE id=?1 AND status='preparing' AND EXISTS(SELECT 1 FROM batches b WHERE b.batch_id=jobs.batch_id AND b.status='active' AND b.recall_requested=0)", [e.id])?)
+        Ok(s.db.execute("UPDATE jobs SET status='sending' WHERE id=?1 AND status='preparing' AND recall_requested=0", [e.id])?)
     })?;
     if started == 0 {
         return Ok(true);
@@ -629,106 +654,98 @@ pub fn process_recall(
     })
 }
 pub fn confirm_late_recall(shared: &Shared, id: u64) -> Result<()> {
-    let Some(item) = status(shared, id)? else {
-        return Ok(());
-    };
-    let batch = item["batch_id"].as_str().unwrap();
-    if batch_confirmed(shared, batch)? {
+    let recalled = shared
+        .ledger
+        .lock()
+        .unwrap()
+        .sent
+        .get(&id)
+        .is_some_and(|r| r.recalled);
+    if recalled {
         store(shared, |s| {
-            s.db.execute("UPDATE batches SET status='recalled',error='' WHERE batch_id=?1 AND status IN ('recalling','recall_failed')", [batch])?;
+            s.db.execute("UPDATE jobs SET recall_status='recalled',recall_error='' WHERE id=?1 AND recall_status IN ('recalling','recall_failed','requested','scheduled')", [id])?;
             Ok(())
         })?;
     }
     Ok(())
 }
-fn batch_confirmed(shared: &Shared, batch: &str) -> Result<bool> {
-    let ids = store(shared, |s| {
-        let mut q =
-            s.db.prepare("SELECT id,status FROM jobs WHERE batch_id=?1")?;
-        Ok(q.query_map([batch], |r| {
-            Ok((r.get::<_, u64>(0)?, r.get::<_, String>(1)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
-    })?;
-    let ledger = shared.ledger.lock().unwrap();
-    Ok(!ids.is_empty()
-        && ids.iter().all(|(id, state)| {
-            (state == "sent" || state == "cancelled")
-                && ledger
-                    .sent
-                    .get(id)
-                    .map_or(state == "cancelled", |r| r.recalled)
-        }))
-}
 fn process_recall_with(
     shared: &Arc<Shared>,
     mut recall: impl FnMut(u64) -> Result<()>,
 ) -> Result<bool> {
-    let batches = store(shared, |s| {
-        let mut q=s.db.prepare("SELECT batch_id,delay,recall_requested FROM batches WHERE status='active' AND (delay IS NOT NULL OR recall_requested=1)")?;
+    let jobs = store(shared, |s| {
+        let mut q=s.db.prepare("SELECT id,recall_delay,recall_requested,recall_status,enqueued FROM jobs WHERE recall_requested=1 OR recall_delay IS NOT NULL ORDER BY id LIMIT 100")?;
         Ok(q.query_map([], |r| {
             Ok((
-                r.get::<_, String>(0)?,
+                r.get::<_, u64>(0)?,
                 r.get::<_, Option<f64>>(1)?,
                 r.get::<_, bool>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, f64>(4)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?)
     })?;
-    for (batch, delay, requested) in batches {
-        if !requested
-            && !deadline(shared, &batch, delay.unwrap_or(120.))?
-                .is_some_and(|due| due <= config::now())
-        {
+    for (id, delay, requested, recall_status, enqueued) in jobs {
+        if matches!(
+            recall_status.as_str(),
+            "recalled" | "cancelled" | "recall_failed"
+        ) {
             continue;
         }
-        store(shared, |s| {
+        let due = if requested {
+            Some(config::now())
+        } else if let Some(delay) = delay {
+            due_at(shared, id, delay)?.or_else(|| {
+                let cap = crate::actions::recall_limit(&shared.config.read().unwrap().raw);
+                Some(enqueued + delay.min(cap) - 3.)
+            })
+        } else {
+            None
+        };
+        if due.is_none_or(|due| due > config::now()) {
+            continue;
+        }
+        let cancelled_now = store(shared, |s| {
             let tx = s.db.transaction()?;
             tx.execute(
-                "UPDATE batches SET status='recalling',recall_requested=1 WHERE batch_id=?1",
-                [&batch],
+                "UPDATE jobs SET recall_status='recalling' WHERE id=?1",
+                [id],
             )?;
-            tx.execute("UPDATE jobs SET status='cancelled',error='整次触发撤回，取消尚未发送内容',finished=?1 WHERE batch_id=?2 AND status IN ('queued','preparing')",params![config::now(),batch])?;
+            let changed=tx.execute("UPDATE jobs SET status='cancelled',error='该次输出已撤回，取消尚未发送内容',finished=?1,recall_status='cancelled' WHERE id=?2 AND status IN ('queued','preparing')",params![config::now(),id])?;
             tx.commit()?;
-            Ok(())
+            Ok(changed > 0)
         })?;
-        let ids = batch_ids(shared, &batch)?;
-        let mut errors = vec![];
-        let mut count = 0;
-        for id in ids {
-            if status(shared, id)?.is_some_and(|s| s["delivery_status"] == "uncertain") {
-                errors.push(format!("{id}: 发送存在未确认部分，不能声称已全部撤回"));
+        if cancelled_now || !shared.ledger.lock().unwrap().sent.contains_key(&id) {
+            if !cancelled_now {
+                store(shared, |s| {
+                    s.db.execute("UPDATE jobs SET recall_status='recall_failed',recall_error='没有可核验的已发送记录' WHERE id=?1",[id])?;
+                    Ok(())
+                })?;
             }
-            if !shared.ledger.lock().unwrap().sent.contains_key(&id) {
-                continue;
-            }
-            count += 1;
-            if let Err(e) = recall(id) {
-                errors.push(format!("{id}: {e}"));
-            }
+            continue;
         }
-        if !errors.is_empty() && batch_confirmed(shared, &batch)? {
-            errors.clear();
-        }
-        let message = errors.join("；");
+        let result = recall(id);
+        let (state, error) = match &result {
+            Ok(()) => ("recalled", String::new()),
+            Err(e) => ("recall_failed", e.to_string()),
+        };
         store(shared, |s| {
             s.db.execute(
-                "UPDATE batches SET status=?1,error=?2 WHERE batch_id=?3",
-                params![
-                    if errors.is_empty() {
-                        "recalled"
-                    } else {
-                        "recall_failed"
-                    },
-                    message,
-                    batch
-                ],
+                "UPDATE jobs SET recall_status=?1,recall_error=?2 WHERE id=?3",
+                params![state, error, id],
             )?;
             Ok(())
         })?;
         shared.log(&format!(
-            "整次触发撤回完成：批次={batch}，处理{count}个回复，失败{}项 {message}",
-            errors.len()
+            "输出撤回{}：消息ID={id}{}{}",
+            if result.is_ok() {
+                "完成"
+            } else {
+                "未全部成功"
+            },
+            if error.is_empty() { "" } else { "；" },
+            error
         ));
         return Ok(true);
     }
@@ -766,8 +783,8 @@ pub fn gui_text(data: &Path, token: &str) -> String {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
         db.busy_timeout(Duration::from_millis(250))?;
-        let mut q=db.prepare("SELECT j.id,j.name,j.status,j.batch_id,j.error,b.status,b.error,b.source FROM jobs j JOIN batches b ON b.batch_id=j.batch_id ORDER BY j.id DESC LIMIT 200")?;
-        let mut lines=vec!["已入队表示内容已保存；“发送成功”表示微信已确认发出。\r\n整次触发的所有输出及其拆分的图片、文字、进度和撤回提示共用一个批次，撤回时一起处理。\r\n".to_owned()];
+        let mut q=db.prepare("SELECT j.id,j.name,j.status,j.batch_id,j.error,j.recall_status,j.recall_error,b.source FROM jobs j JOIN batches b ON b.batch_id=j.batch_id ORDER BY j.id DESC LIMIT 200")?;
+        let mut lines=vec!["已入队表示内容已保存；“发送成功”表示微信已确认发出。\r\n每次输出拆分的图片、文字、艾特和提示共用一个撤回范围；其他输出独立，不会因为一次撤回而阻断后续发送。\r\n".to_owned()];
         for row in q.query_map([], |r| {
             Ok((
                 r.get::<_, u64>(0)?,
@@ -792,9 +809,12 @@ pub fn gui_text(data: &Path, token: &str) -> String {
                 _ => &state,
             };
             let recall = match recall.as_str() {
-                "active" => "尚未撤回",
+                "" => "尚未撤回",
+                "scheduled" => "已登记定时撤回",
+                "requested" => "已登记撤回",
                 "recalling" => "撤回中",
-                "recalled" => "整批已撤回",
+                "recalled" => "该次输出已撤回",
+                "cancelled" => "已取消",
                 "recall_failed" => "撤回未全部成功",
                 _ => &recall,
             };
@@ -825,61 +845,63 @@ mod tests {
     fn send(s: &Shared, c: &Config, name: &str, source: &str) -> Value {
         enqueue(s,c,&json!({"action":"send_private_msg","params":{"user_id":config::contact_id(name),"message":[{"type":"reply","data":{"id":source}},{"type":"text","data":{"text":"原文 ccc1 CCC1"}}]}})).unwrap()
     }
-    #[test]
-    fn workflow_tracking_uses_one_trigger_batch_and_never_splits_outputs() {
-        let d = tempfile::tempdir().unwrap();
-        let (c, s) = setup(d.path());
-        let p = json!({"user_id":config::contact_id("甲"),"wechat_batch_id":"pipeline"});
-        let flow = workflow(&s, &c, &p, true).unwrap();
-        let receipt = send(&s, &c, "甲", "pipeline");
-        assert_eq!(flow["batch_id"], receipt["batch_id"]);
-        assert_eq!(receipt["recall_scope"], "trigger");
-        assert_eq!(receipt["trigger_id"], "pipeline");
-        let id = receipt["message_id"].as_u64().unwrap();
-        let at = config::now() - 40.;
+    fn track(s: &Shared, c: &Config, id: u64, at: f64, parts: usize) {
         s.ledger.lock().unwrap().sent.insert(
             id,
             crate::actions::Record {
                 name: "甲".into(),
                 group: false,
                 binding: c.binding().unwrap(),
-                messages: vec![crate::actions::Tracked {
-                    native_cgi: None,
-                    row: crate::database::Message {
-                        local_id: 1,
-                        server_id: 2,
-                        sort_seq: 1,
-                        create_time: at as i64,
-                        kind: 1,
-                        sender: "self".into(),
-                        content: "body".into(),
-                        shard: "m".into(),
-                    },
-                    runtime_id: vec![],
-                    sent_at: at,
-                }],
+                messages: (0..parts)
+                    .map(|n| crate::actions::Tracked {
+                        native_cgi: None,
+                        row: crate::database::Message {
+                            local_id: 1 + n as i64,
+                            server_id: 2 + n as i64,
+                            sort_seq: 1 + n as i64,
+                            create_time: at as i64,
+                            kind: 1,
+                            sender: "self".into(),
+                            content: format!("part {n}"),
+                            shard: "m".into(),
+                        },
+                        runtime_id: vec![],
+                        sent_at: at,
+                    })
+                    .collect(),
                 nodes: None,
                 recalled: false,
             },
         );
-        crate::actions::save(&s).unwrap();
-        finish(&s, id, "sent", "").unwrap();
-        request_recall(&s, id, Some(1000.)).unwrap();
-        let batch = receipt["batch_id"].as_str().unwrap();
-        let held = deadline(&s, batch, 1.).unwrap().unwrap();
-        assert!(held < config::now());
-        assert!((held - (at + 0.9)).abs() < 0.1);
-        drop(s);
-        let (next, _) = Shared::new(c.clone());
-        recover(&next).unwrap();
-        assert_eq!(summary(&next).unwrap()["open_workflows"], 1);
-        assert!((deadline(&next, batch, 1.).unwrap().unwrap() - held).abs() < 0.1);
-        workflow(&next, &c, &p, false).unwrap();
-        assert_eq!(summary(&next).unwrap()["open_workflows"], 0);
-        assert!(deadline(&next, batch, 1.).unwrap().unwrap() < config::now());
+        crate::actions::save(s).unwrap();
+        finish(s, id, "sent", "").unwrap();
     }
     #[test]
-    fn explicit_trigger_groups_every_output_and_one_recall_cancels_them_together() {
+    fn workflow_tracking_uses_one_trigger_batch_but_recall_stays_output_scoped() {
+        let d = tempfile::tempdir().unwrap();
+        let (c, s) = setup(d.path());
+        let p = json!({"user_id":config::contact_id("甲"),"wechat_batch_id":"pipeline"});
+        let flow = workflow(&s, &c, &p, true).unwrap();
+        let receipt = send(&s, &c, "甲", "pipeline");
+        assert_eq!(flow["batch_id"], receipt["batch_id"]);
+        assert_eq!(receipt["recall_scope"], "output");
+        assert_eq!(receipt["trigger_id"], "pipeline");
+        let id = receipt["message_id"].as_u64().unwrap();
+        let at = config::now() - 40.;
+        track(&s, &c, id, at, 3);
+        request_recall(&s, id, Some(1000.)).unwrap();
+        let held = due_at(&s, id, 1.).unwrap().unwrap();
+        assert!(held < config::now());
+        assert!((held - (at + 0.9)).abs() < 0.1);
+        assert_eq!(
+            status(&s, id).unwrap().unwrap()["recall_status"],
+            "scheduled"
+        );
+        workflow(&s, &c, &p, false).unwrap();
+        assert_eq!(summary(&s).unwrap()["open_workflows"], 0);
+    }
+    #[test]
+    fn same_trigger_outputs_share_trace_but_one_recall_never_blocks_later_sends() {
         let d = tempfile::tempdir().unwrap();
         let (c, s) = setup(d.path());
         let p = json!({"action":"send_private_msg","params":{"user_id":config::contact_id("甲"),"wechat_batch_id":"same","message":"body"}});
@@ -888,52 +910,58 @@ mod tests {
         assert_eq!(a["batch_id"], b["batch_id"]);
         let aid = a["message_id"].as_u64().unwrap();
         let bid = b["message_id"].as_u64().unwrap();
-        request_recall(&s, bid, None).unwrap();
-        assert_eq!(
-            status(&s, aid).unwrap().unwrap()["delivery_status"],
-            "cancelled"
-        );
+        track(&s, &c, aid, config::now() - 5., 1);
+        request_recall(&s, aid, None).unwrap();
         assert_eq!(
             status(&s, bid).unwrap().unwrap()["delivery_status"],
-            "cancelled"
+            "queued"
         );
-        assert!(enqueue(&s, &c, &p).is_err());
+        assert!(
+            enqueue(&s, &c, &json!({"action":"send_private_msg","params":{"user_id":config::contact_id("甲"),"wechat_batch_id":"same","message":"late final"}})).is_ok()
+        );
+        assert!(process_recall_with(&s, |_| Ok(())).unwrap());
+        assert_eq!(
+            status(&s, aid).unwrap().unwrap()["recall_status"],
+            "recalled"
+        );
     }
     #[test]
-    fn trigger_recall_covers_progress_image_text_and_notice_but_not_other_triggers() {
+    fn one_outputs_three_physical_parts_share_one_recall_record() {
         let d = tempfile::tempdir().unwrap();
         let (c, s) = setup(d.path());
-        let a = send(&s, &c, "甲", "500");
-        let b = send(&s, &c, "甲", "500");
-        let c2 = send(&s, &c, "甲", "500");
-        let other = send(&s, &c, "甲", "501");
-        let other_user = send(&s, &c, "乙", "500");
-        assert_eq!(a["batch_id"], b["batch_id"]);
-        assert_eq!(a["batch_id"], c2["batch_id"]);
-        assert_ne!(a["batch_id"], other["batch_id"]);
-        assert_ne!(a["batch_id"], other_user["batch_id"]);
-        request_recall(&s, b["message_id"].as_u64().unwrap(), None).unwrap();
-        for receipt in [&a, &b, &c2] {
-            assert_eq!(
-                status(&s, receipt["message_id"].as_u64().unwrap())
-                    .unwrap()
-                    .unwrap()["delivery_status"],
-                "cancelled"
-            );
-        }
+        let receipt = send(&s, &c, "甲", "500");
+        let id = receipt["message_id"].as_u64().unwrap();
+        track(&s, &c, id, config::now() - 5., 3);
+        request_recall(&s, id, None).unwrap();
+        let mut visited = vec![];
+        assert!(
+            process_recall_with(&s, |id| {
+                visited.push(id);
+                Ok(())
+            })
+            .unwrap()
+        );
+        assert_eq!(visited, [id]);
         assert_eq!(
-            status(&s, other["message_id"].as_u64().unwrap())
-                .unwrap()
-                .unwrap()["delivery_status"],
+            status(&s, id).unwrap().unwrap()["recall_status"],
+            "recalled"
+        );
+        assert_eq!(s.ledger.lock().unwrap().sent[&id].messages.len(), 3);
+    }
+    #[test]
+    fn delayed_recall_is_persistent_and_does_not_change_enqueue_deadline() {
+        let d = tempfile::tempdir().unwrap();
+        let (c, s) = setup(d.path());
+        let a = send(&s, &c, "甲", "10");
+        let id = a["message_id"].as_u64().unwrap();
+        let v = request_recall(&s, id, Some(999999.)).unwrap().unwrap();
+        assert_eq!(v["delay_seconds"], 120.);
+        assert_eq!(status(&s, id).unwrap().unwrap()["recall_delay"], 120.);
+        assert_eq!(
+            status(&s, id).unwrap().unwrap()["delivery_status"],
             "queued"
         );
-        assert_eq!(
-            status(&s, other_user["message_id"].as_u64().unwrap())
-                .unwrap()
-                .unwrap()["delivery_status"],
-            "queued"
-        );
-        assert!(enqueue(&s,&c,&json!({"action":"send_private_msg","params":{"user_id":config::contact_id("甲"),"wechat_batch_id":"500","message":"later same trigger"}})).is_err());
+        assert!(!cancelled(&s, id).unwrap());
     }
     #[test]
     fn restart_resumes_only_work_that_cannot_have_been_submitted() {
@@ -968,27 +996,6 @@ mod tests {
         );
     }
     #[test]
-    fn queued_recall_delay_is_persistent_and_has_no_enqueue_time_deadline() {
-        let d = tempfile::tempdir().unwrap();
-        let (c, s) = setup(d.path());
-        let a = send(&s, &c, "甲", "10");
-        let id = a["message_id"].as_u64().unwrap();
-        let v = request_recall(&s, id, Some(999999.)).unwrap().unwrap();
-        assert_eq!(v["delay_seconds"], 120.);
-        assert_eq!(
-            deadline(&s, a["batch_id"].as_str().unwrap(), 120.).unwrap(),
-            None
-        );
-        drop(s);
-        let (s, _) = Shared::new(c);
-        recover(&s).unwrap();
-        assert!(!cancelled(&s, id).unwrap());
-        assert_eq!(
-            status(&s, id).unwrap().unwrap()["delivery_status"],
-            "queued"
-        );
-    }
-    #[test]
     fn sixty_four_receipts_cross_restart_and_execute_fifo_without_a_live_connection() {
         let d = tempfile::tempdir().unwrap();
         let (c, s) = setup(d.path());
@@ -1017,64 +1024,30 @@ mod tests {
         assert!(gui_text(&s.data, "").contains("发送成功"));
     }
     #[test]
-    fn failed_recall_still_attempts_every_output_of_the_trigger() {
+    fn failed_output_recall_never_touches_its_sibling_output_or_cancels_late_send() {
         let d = tempfile::tempdir().unwrap();
         let (c, s) = setup(d.path());
         let a = send(&s, &c, "甲", "batch");
         let b = send(&s, &c, "甲", "batch");
-        let other = send(&s, &c, "甲", "other");
         let ids = [
             a["message_id"].as_u64().unwrap(),
             b["message_id"].as_u64().unwrap(),
         ];
-        for id in ids {
-            s.ledger.lock().unwrap().sent.insert(
-                id,
-                crate::actions::Record {
-                    name: "甲".into(),
-                    group: false,
-                    binding: c.binding().unwrap(),
-                    messages: vec![],
-                    nodes: None,
-                    recalled: false,
-                },
-            );
-        }
+        track(&s, &c, ids[0], config::now() - 5., 2);
         request_recall(&s, ids[0], None).unwrap();
-        let mut visited = vec![];
-        assert!(
-            process_recall_with(&s, |id| {
-                visited.push(id);
-                if id == ids[0] {
-                    bail!("fixture native failure")
-                }
-                Ok(())
-            })
-            .unwrap()
+        assert!(process_recall_with(&s, |_| bail!("fixture native failure")).unwrap());
+        assert_eq!(
+            status(&s, ids[0]).unwrap().unwrap()["recall_status"],
+            "recall_failed"
         );
-        assert_eq!(visited, ids);
         assert_eq!(
             status(&s, ids[1]).unwrap().unwrap()["delivery_status"],
-            "cancelled"
-        );
-        assert_eq!(
-            status(&s, other["message_id"].as_u64().unwrap())
-                .unwrap()
-                .unwrap()["delivery_status"],
             "queued"
         );
-        let state = store(&s, |db| {
-            Ok(db.db.query_row(
-                "SELECT status FROM batches WHERE batch_id=?1",
-                [a["batch_id"].as_str().unwrap()],
-                |r| r.get::<_, String>(0),
-            )?)
-        })
-        .unwrap();
-        assert_eq!(state, "recall_failed");
+        assert!(enqueue(&s,&c,&json!({"action":"send_private_msg","params":{"user_id":config::contact_id("甲"),"wechat_batch_id":"batch","message":"late"}})).is_ok());
     }
     #[test]
-    fn batch_timer_reserves_each_childs_recall_before_its_own_cap() {
+    fn output_timer_reserves_each_part_before_its_own_cap() {
         let mut times = vec![100., 102., 104.];
         let due = batch_deadline(&mut times, 120., 120., false).unwrap();
         assert_eq!(due, 215.);

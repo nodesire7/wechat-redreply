@@ -774,8 +774,16 @@ pub fn entry() -> Result<()> {
     }
     if args.iter().any(|s| s == "--service") {
         run(config)
-    } else {
+    } else if std::env::args().any(|s| s == "--native-gui") {
         crate::gui::run(config)
+    } else {
+        match crate::gui_web::run(config.clone()) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                eprintln!("WebView2 界面启动失败，回退原生界面：{error:#}");
+                crate::gui::run(config)
+            }
+        }
     }
 }
 fn run(config: Config) -> Result<()> {

@@ -33,6 +33,8 @@ const PRIVATE: i32 = 200;
 const GROUP: i32 = 201;
 const STATUS: i32 = 400;
 const FONT_SIZES: [f64; 4] = [20., 36., 30., 20.];
+const CHROME_TOP: i32 = 31;
+const TITLEBAR_HEIGHT: i32 = 40;
 const NOTICE: i32 = 401;
 enum Work {
     Notice(String),
@@ -159,7 +161,6 @@ impl App {
         unsafe {
             self.label(600, "账号与接入", None)?;
             self.label(630, "绑定微信，并连接你的红色问答", None)?;
-            self.label(631, "微信 · 红色问答", None)?;
             self.label(633, "微信 未绑定", Some(101))?;
             self.label(634, "RedReply 未连接", Some(101))?;
             self.label(632, "RedReply 连接", Some(101))?;
@@ -181,6 +182,9 @@ impl App {
                 (103, "日志与对话"),
                 (104, "发送队列"),
             ] {
+                self.button(id, text, None)?;
+            }
+            for (id, text) in [(650, "最小化"), (651, "最大化"), (652, "关闭")] {
                 self.button(id, text, None)?;
             }
             self.label(NOTICE, "关闭设置窗口不会停止监听。", None)?;
@@ -570,6 +574,11 @@ impl App {
         unsafe {
             if let Some(c) = self.controls.get(&id) {
                 let s = self.scale;
+                let y = if matches!(id, 650..=652) {
+                    y
+                } else {
+                    y + CHROME_TOP
+                };
                 let _ = MoveWindow(
                     *c,
                     (x as f64 * s) as _,
@@ -609,7 +618,8 @@ impl App {
         unsafe {
             let mut r = RECT::default();
             let _ = GetClientRect(self.root, &mut r);
-            ((r.bottom as f64 / self.scale - 140.) / 674.).clamp(0.90, 1.35)
+            let content = (r.bottom as f64 / self.scale - CHROME_TOP as f64).max(600.);
+            ((content - 140.) / 674.).clamp(0.90, 1.35)
         }
     }
     unsafe fn field(&self, id: i32, x: i32, y: i32, w: i32, h: i32) {
@@ -622,20 +632,18 @@ impl App {
             let mut r = RECT::default();
             let _ = GetClientRect(self.root, &mut r);
             let w = (r.right as f64 / self.scale) as i32;
-            let h = (r.bottom as f64 / self.scale) as i32;
+            let h = ((r.bottom as f64 / self.scale) as i32 - CHROME_TOP).max(600);
             let side = self.side_width();
             let left = side + 28;
             let width = w - left - 28;
             let v = self.vertical();
             let y = |n: i32| (n as f64 * v) as i32;
             let bottom = h - 152;
-            if side < 220 {
-                self.place(631, 42, 20, side - 44, 30);
-            } else {
-                self.place(631, 53, 20, side - 62, 30);
-            }
             for (i, id) in [101, 100, 104, 103, 102].iter().enumerate() {
                 self.place(*id, 12, 52 + i as i32 * 62, side - 24, 54);
+            }
+            for (i, id) in [650, 651, 652].iter().enumerate() {
+                self.place(*id, w - 44 - 44 * (3 - i as i32), 0, 44, TITLEBAR_HEIGHT);
             }
             self.place(STATUS, 22, h - 54, side - 38, 38);
             self.place(600, left, y(36), width, 48);
@@ -704,7 +712,8 @@ impl App {
             let bind_x = refresh_x + refresh_w + 14;
             self.place(305, refresh_x, operation_y, refresh_w, y(44));
             self.place(306, bind_x, operation_y, bind_w, y(44));
-            let top = if self.tls_expanded { 280 } else { 336 };
+            let top = if self.tls_expanded { 280 } else { 312 };
+            let field_h = if self.tls_expanded { 36 } else { 44 };
             let row = |expanded: i32, collapsed: i32| {
                 if self.tls_expanded {
                     expanded
@@ -721,23 +730,23 @@ impl App {
                 (502, left + 2 * (third + 18), width - 2 * (third + 18)),
             ] {
                 self.place(id + 200, x, y(top + row(40, 44)), fw, 26);
-                self.field(id, x, y(top + row(66, 72)), fw, y(36));
+                self.field(id, x, y(top + row(66, 66)), fw, y(field_h));
             }
-            self.place(704, left, y(top + row(118, 132)), half, 26);
-            self.field(504, left, y(top + row(144, 160)), half, y(36));
-            self.place(703, left + half + 18, y(top + row(118, 132)), half, 26);
+            self.place(704, left, y(top + row(118, 120)), half, 26);
+            self.field(504, left, y(top + row(144, 152)), half, y(field_h));
+            self.place(703, left + half + 18, y(top + row(118, 120)), half, 26);
             self.field(
                 503,
                 left + half + 18,
-                y(top + row(144, 160)),
+                y(top + row(144, 152)),
                 half - 46,
-                y(36),
+                y(field_h),
             );
-            self.place(307, w - 68, y(top + row(144, 160)), 40, y(36));
-            self.place(705, left, y(top + row(192, 216)), width, 26);
-            self.field(505, left, y(top + row(218, 244)), width - 250, y(36));
-            self.place(304, w - 266, y(top + row(218, 244)), 238, y(36));
-            self.place(319, left, y(top + row(270, 300)), width, y(38));
+            self.place(307, w - 68, y(top + row(144, 152)), 40, y(field_h));
+            self.place(705, left, y(top + row(192, 222)), width, 26);
+            self.field(505, left, y(top + row(218, 244)), width - 250, y(field_h));
+            self.place(304, w - 266, y(top + row(218, 244)), 238, y(field_h));
+            self.place(319, left, y(top + row(270, 294)), width, y(38));
             for id in [506, 507, 706, 707] {
                 let _ = ShowWindow(
                     self.controls[&id],
@@ -882,18 +891,12 @@ impl App {
             let running = state["running"] == true;
             let text = if running {
                 format!(
-                    "{} · {} · {}ms",
-                    if state["ready"] == true {
-                        "微信就绪"
-                    } else {
-                        "初始化中"
-                    },
+                    "运行中 · {}",
                     if state["connected"] == true {
                         "已连接"
                     } else {
                         "等待 RedReply"
-                    },
-                    state["metrics"]["poll_ms"]
+                    }
                 )
             } else {
                 "监听已停止".to_owned()
@@ -1053,6 +1056,25 @@ impl App {
             }
             let result = (|| -> Result<String> {
                 match id {
+                    650 => {
+                        let _ = ShowWindow(self.root, SW_MINIMIZE);
+                        return Ok(String::new());
+                    }
+                    651 => {
+                        let _ = ShowWindow(
+                            self.root,
+                            if IsZoomed(self.root).as_bool() {
+                                SW_RESTORE
+                            } else {
+                                SW_MAXIMIZE
+                            },
+                        );
+                        return Ok(String::new());
+                    }
+                    652 => {
+                        let _ = PostMessageW(Some(self.root), WM_CLOSE, WPARAM(0), LPARAM(0));
+                        return Ok(String::new());
+                    }
                     100..=104 => {
                         self.show(id);
                         return Ok(String::new());
@@ -1287,7 +1309,7 @@ impl App {
         }
     }
 }
-pub fn state(c: &Config) -> Value {
+pub(crate) fn state(c: &Config) -> Value {
     let mut state =
         config::load(&c.path.parent().unwrap().join("data/state.json")).unwrap_or(json!({}));
     if config::now() - state["updated_at"].as_f64().unwrap_or(0.) > 10. {
@@ -1306,7 +1328,7 @@ pub fn state(c: &Config) -> Value {
     }
     state
 }
-fn start(c: &Config) -> Result<()> {
+pub(crate) fn start(c: &Config) -> Result<()> {
     use std::os::windows::process::CommandExt;
     if state(c)["running"] == true {
         return Ok(());
@@ -1337,7 +1359,7 @@ fn request_stop(c: &Config) -> Result<()> {
     std::fs::write(c.path.parent().unwrap().join("data/stop.request"), b"stop")?;
     Ok(())
 }
-fn stop_and_wait(c: &Config) -> Result<()> {
+pub(crate) fn stop_and_wait(c: &Config) -> Result<()> {
     request_stop(c)?;
     let deadline = std::time::Instant::now() + Duration::from_secs(35);
     while state(c)["running"] == true {
@@ -1560,6 +1582,45 @@ unsafe extern "system" fn proc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESU
                     theme::paint(app, dc);
                     let _ = EndPaint(h, &ps);
                     return LRESULT(0);
+                }
+                WM_NCCALCSIZE => {
+                    if w.0 != 0 {
+                        return LRESULT(0);
+                    }
+                }
+                WM_NCHITTEST => {
+                    let mut pt = POINT {
+                        x: (l.0 as i32 & 0xffff) as i16 as i32,
+                        y: ((l.0 as i32 >> 16) & 0xffff) as i16 as i32,
+                    };
+                    let mut r = RECT::default();
+                    let _ = GetClientRect(h, &mut r);
+                    let _ = ScreenToClient(h, &mut pt);
+                    let edge = (8. * app.scale) as i32;
+                    if !IsZoomed(h).as_bool() {
+                        let left = pt.x < edge;
+                        let right = pt.x >= r.right - edge;
+                        let top = pt.y < edge;
+                        let bottom = pt.y >= r.bottom - edge;
+                        let hit = match (left, right, top, bottom) {
+                            (true, _, true, _) => HTTOPLEFT,
+                            (_, true, true, _) => HTTOPRIGHT,
+                            (true, _, _, true) => HTBOTTOMLEFT,
+                            (_, true, _, true) => HTBOTTOMRIGHT,
+                            (true, _, _, _) => HTLEFT,
+                            (_, true, _, _) => HTRIGHT,
+                            (_, _, true, _) => HTTOP,
+                            (_, _, _, true) => HTBOTTOM,
+                            _ => HTCLIENT,
+                        };
+                        if hit != HTCLIENT {
+                            return LRESULT(hit as isize);
+                        }
+                    }
+                    if pt.y < (TITLEBAR_HEIGHT as f64 * app.scale) as i32 {
+                        return LRESULT(HTCAPTION as isize);
+                    }
+                    return LRESULT(HTCLIENT as isize);
                 }
                 WM_MEASUREITEM => {
                     if l.0 != 0 {

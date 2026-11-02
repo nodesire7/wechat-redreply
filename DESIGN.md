@@ -97,9 +97,9 @@ components:
 
 **Creative North Star: "Motrix-style account-first control desk"**
 
-A pale-blue navigation rail and a spacious white working pane make Chinese account and connection settings easy to scan. A narrow pale-blue band crosses above the rounded white pane, as in the approved B composition. Restrained indigo actions, charcoal text and small geometric line icons carry the user's pinned Motrix reference into a native Rust / Win32 application delivered as one portable EXE. The surface works in Operate mode: account identity, connection identity and actual running state guide the next action.
+A pale-blue navigation rail and a spacious white inset working pane make Chinese account and connection settings easy to scan. The surface is now rendered by a local WebView2 page inside the Rust host, with the same Motrix-derived composition. Restrained indigo actions, charcoal text and thin line icons carry the pinned Motrix reference in one portable EXE. The surface works in Operate mode: account identity, connection identity and actual running state guide the next action.
 
-This records the implemented system in `src/gui.rs` and `src/gui_theme.rs`, using `PRODUCT.md` and the account surface brief for durable product constraints. The approved option B composition places the account strip above connection settings and opens on “账号与接入”. It favors saving as part of the requested action. Native Windows chrome, selection, dropdowns, keyboard behavior and editable text remain real controls. There is no browser runtime, shipping UI raster or decorative animation.
+This records the implemented system in `src/gui_web.rs` and `assets/gui`, using `PRODUCT.md` and the account surface brief for durable product constraints. The approved option B composition places the account strip above connection settings and opens on “账号与接入”. It favors saving as part of the requested action. Native Windows chrome, selection, dropdowns, keyboard behavior and editable text remain real controls. There is no browser runtime, shipping UI raster or decorative animation.
 
 **Key Characteristics:**
 
