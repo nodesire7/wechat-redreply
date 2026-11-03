@@ -1112,6 +1112,72 @@ impl Automation {
             &json!({"wanted":wanted,"windows":windows,"list":list,"visible":visible}),
         );
     }
+    fn recall_item_any(&self, h: HWND) -> Result<IUIAutomationElement> {
+        for root in self.action_roots(h)? {
+            for node in self.descendants(&root).unwrap_or_default() {
+                unsafe {
+                    let named = node
+                        .CurrentName()
+                        .ok()
+                        .is_some_and(|n| n.to_string().contains("撤回"));
+                    let enabled = node.CurrentIsEnabled().is_ok_and(|value| value.as_bool());
+                    let rect = node
+                        .CurrentBoundingRectangle()
+                        .ok()
+                        .is_some_and(|r| r.right > r.left && r.bottom > r.top);
+                    if named && enabled && rect {
+                        return Ok(node);
+                    }
+                }
+            }
+        }
+        bail!("原生操作【撤回】不可用")
+    }
+    fn click_red_recall(&self, h: HWND) -> Result<bool> {
+        let mut windows = crate::native::thread_windows(h);
+        windows.push(h);
+        for window in windows {
+            let Ok(picture) = crate::native::capture(window) else {
+                continue;
+            };
+            let (mut sx, mut sy, mut count) = (0u64, 0u64, 0u32);
+            for (x, y, pixel) in picture.enumerate_pixels() {
+                let (r, g, b) = (pixel[0] as i32, pixel[1] as i32, pixel[2] as i32);
+                if r > 150 && r > g + 40 && r > b + 40 {
+                    sx += x as u64;
+                    sy += y as u64;
+                    count += 1;
+                }
+            }
+            if count >= 30 {
+                let mut client = RECT::default();
+                unsafe {
+                    let _ = GetClientRect(window, &mut client);
+                }
+                let client_width = (client.right - client.left).max(1) as f32;
+                let scale = (picture.width() as f32 / client_width).max(0.1);
+                let x = ((sx / count as u64) as f32 / scale) as i32;
+                let y = ((sy / count as u64) as f32 / scale) as i32;
+                unsafe {
+                    for (message, key) in [
+                        (WM_MOUSEMOVE, 0usize),
+                        (WM_LBUTTONDOWN, 1usize),
+                        (WM_LBUTTONUP, 0usize),
+                    ] {
+                        PostMessageW(
+                            Some(window),
+                            message,
+                            WPARAM(key),
+                            LPARAM(((y << 16) | (x & 0xffff)) as isize),
+                        )?;
+                        std::thread::sleep(Duration::from_millis(30));
+                    }
+                }
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     fn recall_menu_item(&self, h: HWND) -> Result<IUIAutomationElement> {
         for popup in crate::native::thread_windows(h) {
             let root = self.root(popup)?;
@@ -1290,8 +1356,15 @@ impl Automation {
                 }
                 let action = self
                     .named_action(h, "撤回")
-                    .or_else(|_| self.recall_menu_item(h))?;
-                self.click_native(&action, h)?;
+                    .or_else(|_| self.recall_item_any(h))
+                    .or_else(|_| self.recall_menu_item(h));
+                match action {
+                    Ok(node) => self.click_native(&node, h)?,
+                    Err(_) if !self.click_red_recall(h)? => {
+                        bail!("原生操作【撤回】不可用")
+                    }
+                    Err(_) => {}
+                }
                 std::thread::sleep(Duration::from_millis(150));
                 // Some builds ask for confirmation. Only invoke an explicit recall
                 // confirmation in an owned offscreen window, never a generic Enter.
@@ -1301,7 +1374,7 @@ impl Automation {
                         self.click_native(&button, popup)?;
                     }
                 }
-                let limit = Instant::now() + Duration::from_secs(5);
+                let limit = Instant::now() + Duration::from_secs(15);
                 loop {
                     let changed = shared
                         .own
