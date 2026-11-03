@@ -913,13 +913,14 @@ impl Automation {
         }
     }
     pub(crate) fn context(&self, h: HWND, row: &IUIAutomationElement) -> Result<()> {
-        self.context_with(h, row, true)
+        self.context_with(h, row, true, -18)
     }
     pub(crate) fn context_with(
         &self,
         h: HWND,
         row: &IUIAutomationElement,
         image_ok: bool,
+        fallback_dx: i32,
     ) -> Result<()> {
         unsafe {
             let rect = row.CurrentBoundingRectangle()?;
@@ -1044,7 +1045,7 @@ impl Automation {
             } else {
                 // Cards without an exposed image child use the acknowledged
                 // outgoing row; never click the blank area outside the bubble.
-                (rect.right.min(list.right) - 120 - origin.x, y)
+                (rect.right.min(list.right) - fallback_dx - origin.x, y)
             };
             for (msg, key) in [(WM_MOUSEMOVE, 0), (WM_RBUTTONDOWN, 2), (WM_RBUTTONUP, 0)] {
                 PostMessageW(
@@ -1272,7 +1273,11 @@ impl Automation {
                 {
                     bail!("重新定位后撤回时限已到，未提交");
                 }
-                self.context_with(h, &row, tracked.row.kind == 3)?;
+                if tracked.row.kind == 49 {
+                    self.context_with(h, &row, false, 120)?;
+                } else {
+                    self.context_with(h, &row, tracked.row.kind == 3, 18)?;
+                }
                 // Keep observing after a UI timeout: the database can confirm
                 // later. This watch never re-submits an action and expires in
                 // the receiver, independently of the 120-second submit limit.
