@@ -913,15 +913,20 @@ impl Automation {
         }
     }
     pub(crate) fn context(&self, h: HWND, row: &IUIAutomationElement) -> Result<()> {
-        self.context_with(h, row, true, -18)
+        self.context_with(h, row, true, false, -18)
     }
     pub(crate) fn context_with(
         &self,
         h: HWND,
         row: &IUIAutomationElement,
         image_ok: bool,
+        text_hints: bool,
         fallback_dx: i32,
     ) -> Result<()> {
+        // Context menus are only opened reliably while the bound window is in
+        // the verified off-screen position; a visible/background Qt window can
+        // silently drop the posted right-click.
+        let _ = crate::native::offscreen(h);
         unsafe {
             let rect = row.CurrentBoundingRectangle()?;
             let root = self.root(h)?;
@@ -960,7 +965,11 @@ impl Automation {
             }
             let mut text_node = None;
             let mut text_area = 0i64;
-            for node in self.descendants(row).unwrap_or_default() {
+            for node in if text_hints {
+                self.descendants(row).unwrap_or_default()
+            } else {
+                Vec::new()
+            } {
                 if node.CurrentControlType().ok() != Some(UIA_TextControlTypeId) {
                     continue;
                 }
@@ -1033,7 +1042,7 @@ impl Automation {
                     (r.left + r.right) / 2 - origin.x,
                     (r.top + r.bottom) / 2 - origin.y,
                 )
-            } else if dark_count >= 6 {
+            } else if text_hints && dark_count >= 6 {
                 // The message bubble itself may be white (self-chat staging or
                 // incoming-style); its dark text is the reliable click target.
                 (
@@ -1119,13 +1128,16 @@ impl Automation {
                     let named = node
                         .CurrentName()
                         .ok()
-                        .is_some_and(|n| n.to_string().contains("撤回"));
+                        .is_some_and(|n| n.to_string().trim() == "撤回");
+                    let control = node.CurrentControlType().ok();
+                    let is_button = control == Some(UIA_ButtonControlTypeId)
+                        || control == Some(UIA_MenuItemControlTypeId);
                     let enabled = node.CurrentIsEnabled().is_ok_and(|value| value.as_bool());
                     let rect = node
                         .CurrentBoundingRectangle()
                         .ok()
                         .is_some_and(|r| r.right > r.left && r.bottom > r.top);
-                    if named && enabled && rect {
+                    if named && is_button && enabled && rect {
                         return Ok(node);
                     }
                 }
@@ -1134,7 +1146,19 @@ impl Automation {
         bail!("原生操作【撤回】不可用")
     }
     fn click_red_recall(&self, h: HWND) -> Result<bool> {
-        let mut windows = crate::native::thread_windows(h);
+        let mut pid = 0u32;
+        unsafe {
+            GetWindowThreadProcessId(h, Some(&mut pid));
+        }
+        let mut windows = crate::native::process_windows(pid);
+        windows.extend(crate::native::thread_windows(h));
+        windows.sort_by_key(|window| {
+            let mut rect = RECT::default();
+            unsafe {
+                let _ = GetWindowRect(*window, &mut rect);
+            }
+            (rect.right - rect.left) as i64 * (rect.bottom - rect.top) as i64
+        });
         windows.push(h);
         for window in windows {
             let Ok(picture) = crate::native::capture(window) else {
@@ -1201,7 +1225,18 @@ impl Automation {
     fn action_roots(&self, h: HWND) -> Result<Vec<IUIAutomationElement>> {
         let mut roots = vec![self.root(h)?];
         for popup in crate::native::thread_windows(h) {
-            roots.push(self.root(popup)?);
+            if let Ok(root) = self.root(popup) {
+                roots.push(root);
+            }
+        }
+        let mut pid = 0u32;
+        unsafe {
+            GetWindowThreadProcessId(h, Some(&mut pid));
+        }
+        for window in crate::native::process_windows(pid) {
+            if let Ok(root) = self.root(window) {
+                roots.push(root);
+            }
         }
         Ok(roots)
     }
@@ -1340,9 +1375,9 @@ impl Automation {
                     bail!("重新定位后撤回时限已到，未提交");
                 }
                 if tracked.row.kind == 49 {
-                    self.context_with(h, &row, false, 120)?;
+                    self.context_with(h, &row, false, true, 120)?;
                 } else {
-                    self.context_with(h, &row, tracked.row.kind == 3, 18)?;
+                    self.context_with(h, &row, tracked.row.kind == 3, false, 18)?;
                 }
                 // Keep observing after a UI timeout: the database can confirm
                 // later. This watch never re-submits an action and expires in
@@ -1366,14 +1401,36 @@ impl Automation {
                     Err(_) => {}
                 }
                 std::thread::sleep(Duration::from_millis(150));
-                // Some builds ask for confirmation. Only invoke an explicit recall
-                // confirmation in an owned offscreen window, never a generic Enter.
-                for popup in crate::native::thread_windows(h) {
-                    let root = self.root(popup)?;
-                    if let Ok(button) = self.find(&root, UIA_NamePropertyId, "撤回") {
-                        self.click_native(&button, popup)?;
+                // Some builds open a confirmation layer AFTER the menu item is
+                // clicked. It can live on another UI thread, so scan every
+                // top-level window of the bound process, not just thread popups.
+                std::thread::sleep(Duration::from_millis(250));
+                let mut pid = 0u32;
+                unsafe {
+                    GetWindowThreadProcessId(h, Some(&mut pid));
+                }
+                let mut confirm_windows = crate::native::process_windows(pid);
+                confirm_windows.extend(crate::native::thread_windows(h));
+                let mut confirm_probe = vec![];
+                for popup in confirm_windows {
+                    let Ok(root) = self.root(popup) else { continue };
+                    for name in ["撤回", "确定"] {
+                        if let Ok(button) = self.find(&root, UIA_NamePropertyId, name) {
+                            unsafe {
+                                if button.CurrentControlType().ok() != Some(UIA_ButtonControlTypeId)
+                                {
+                                    continue;
+                                }
+                            }
+                            confirm_probe.push(json!({"window":popup.0 as isize,"button":name}));
+                            self.click_native(&button, popup)?;
+                        }
                     }
                 }
+                let _ = crate::config::atomic(
+                    &shared.data.join("recall-confirm-probe.json"),
+                    &json!(confirm_probe),
+                );
                 let limit = Instant::now() + Duration::from_secs(15);
                 loop {
                     let changed = shared

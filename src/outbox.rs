@@ -213,7 +213,7 @@ pub fn enqueue(shared: &Shared, c: &Config, request: &Value) -> Result<Value> {
     let action = request["action"].as_str().context("Missing action")?;
     let p = &request["params"];
     let group = action == "send_group_msg"
-        || action == "send_group_forward_msg"
+        || (action == "send_group_forward_msg" && number(&p["group_id"]) > 0)
         || (action == "send_msg" && (p["message_type"] == "group" || number(&p["group_id"]) > 0));
     let dest = number(&p[if group { "group_id" } else { "user_id" }]);
     let (name, _) = c

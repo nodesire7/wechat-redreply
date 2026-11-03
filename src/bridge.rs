@@ -410,7 +410,7 @@ fn api_until(
                 if !shared.ready.load(Ordering::SeqCst) || !shared.owner(owner) {
                     bail!("Wechat backend is not ready");
                 }
-                let group = action == "send_group_forward_msg";
+                let group = action == "send_group_forward_msg" && numeric(&params["group_id"]) > 0;
                 let uid = numeric(&params[if group { "group_id" } else { "user_id" }]);
                 let (name, _) = c
                     .scope()
