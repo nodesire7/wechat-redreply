@@ -913,6 +913,14 @@ impl Automation {
         }
     }
     pub(crate) fn context(&self, h: HWND, row: &IUIAutomationElement) -> Result<()> {
+        self.context_with(h, row, true)
+    }
+    pub(crate) fn context_with(
+        &self,
+        h: HWND,
+        row: &IUIAutomationElement,
+        image_ok: bool,
+    ) -> Result<()> {
         unsafe {
             let rect = row.CurrentBoundingRectangle()?;
             let root = self.root(h)?;
@@ -929,7 +937,11 @@ impl Automation {
             let picture = crate::native::capture(h)?;
             let mut image = None;
             let mut image_area = 0i64;
-            for node in self.descendants(row).unwrap_or_default() {
+            for node in if image_ok {
+                self.descendants(row).unwrap_or_default()
+            } else {
+                Vec::new()
+            } {
                 if node.CurrentControlType().ok() != Some(UIA_ImageControlTypeId) {
                     continue;
                 }
@@ -1032,7 +1044,7 @@ impl Automation {
             } else {
                 // Cards without an exposed image child use the acknowledged
                 // outgoing row; never click the blank area outside the bubble.
-                (rect.right.min(list.right) - 18 - origin.x, y)
+                (rect.right.min(list.right) - 120 - origin.x, y)
             };
             for (msg, key) in [(WM_MOUSEMOVE, 0), (WM_RBUTTONDOWN, 2), (WM_RBUTTONUP, 0)] {
                 PostMessageW(
@@ -1229,6 +1241,8 @@ impl Automation {
         // system notice and may move the viewport; the image menu is the same
         // message menu, but its row is easier to lose than a text bubble.
         ordered.sort_by_key(|m| m.row.kind == 1);
+        // Let the freshly forwarded card finish painting before right-clicking.
+        std::thread::sleep(std::time::Duration::from_millis(600));
         for tracked in ordered {
             if tracked.was_recalled() {
                 continue;
@@ -1258,7 +1272,7 @@ impl Automation {
                 {
                     bail!("重新定位后撤回时限已到，未提交");
                 }
-                self.context(h, &row)?;
+                self.context_with(h, &row, tracked.row.kind == 3)?;
                 // Keep observing after a UI timeout: the database can confirm
                 // later. This watch never re-submits an action and expires in
                 // the receiver, independently of the 120-second submit limit.

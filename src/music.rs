@@ -94,7 +94,9 @@ pub fn native_appmsg(card: &MusicCard, app_id: &str) -> Result<String> {
     ] {
         out.push_str(&format!("<{name}>{}</{name}>", escape(text)));
     }
-    out.push_str("<appattach/><extinfo/></appmsg>");
+    // The real QQ Music card carries <appinfo> as a sibling of <appmsg>.
+    // Without the registered display name WeChat renders "未注册的应用".
+    out.push_str("<appinfo><version>54</version><appname>QQ音乐</appname></appinfo><appattach/><extinfo/></appmsg>");
     Ok(out)
 }
 
