@@ -2,6 +2,7 @@
 mod actions;
 mod attachments;
 mod bridge;
+mod compat;
 mod config;
 mod database;
 mod delivery;

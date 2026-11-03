@@ -210,6 +210,9 @@ fn auto_recall_delay(message: &Value) -> Option<f64> {
 
 pub fn enqueue(shared: &Shared, c: &Config, request: &Value) -> Result<Value> {
     c.binding()?;
+    let mut request = request.clone();
+    crate::compat::rewrite(shared, &mut request);
+    let request = &request;
     let action = request["action"].as_str().context("Missing action")?;
     let p = &request["params"];
     let group = action == "send_group_msg"
