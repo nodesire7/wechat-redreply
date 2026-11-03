@@ -113,5 +113,9 @@
       "rva": "0x9ec0",
       "first_32_bytes": "488d4108c3cccccccccccccccccccccc4889d0488d0dde3c000948890ac3cccc"
     }
-  }
+  },
+  "version": "4.2.0.9",
+  "task_vtable": "0x9806818",
+  "callback_vtable": "0x98068a8",
+  "manager_anchor": "0x90c3e28"
 }

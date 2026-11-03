@@ -14,7 +14,18 @@ use windows::{
     },
     core::{PCSTR, PCWSTR},
 };
-const PROFILE: &str = include_str!("../assets/music-cgi-4.2.0.9.json");
+const PROFILE_4209: &str = include_str!("../assets/music-cgi-4.2.0.9.json");
+const PROFILE_4212: &str = include_str!("../assets/music-cgi-4.2.0.12.json");
+fn profile_for(path: &std::path::Path) -> Result<Value> {
+    let hash = hex::encode(Sha256::digest(std::fs::read(path)?));
+    for raw in [PROFILE_4209, PROFILE_4212] {
+        let value: Value = serde_json::from_str(raw)?;
+        if value["sha256"].as_str() == Some(hash.as_str()) {
+            return Ok(value);
+        }
+    }
+    bail!("当前微信版本不在音乐原生后端的已核对版本中")
+}
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Receipt {
     pub from: String,
@@ -150,7 +161,7 @@ pub fn recall(
         bail!("音乐账号或目标发生变化，未撤回其他消息")
     }
     let binding = c.binding()?;
-    let current = native::Process::bound(&binding)?.account_root()?;
+    let current = crate::database::account_root(&c, &native::Process::bound(&binding)?)?;
     if shared
         .bound_root
         .read()
@@ -188,6 +199,10 @@ pub struct Profile {
     pub base: usize,
     pub managers: Vec<usize>,
     pub pid: u32,
+    pub anchor: usize,
+    pub dispatch: usize,
+    pub dispatch_prefix: Vec<u8>,
+    pub version: String,
 }
 fn word(data: &[u8], at: usize) -> Option<usize> {
     data.get(at..at + 8)
@@ -196,7 +211,7 @@ fn word(data: &[u8], at: usize) -> Option<usize> {
 }
 static CACHE: std::sync::OnceLock<std::sync::Mutex<Option<(u32, u64, isize, Profile)>>> =
     std::sync::OnceLock::new();
-fn manager_valid(process: &native::Process, base: usize, address: usize) -> bool {
+fn manager_valid(process: &native::Process, anchor: usize, address: usize) -> bool {
     if address % 8 != 0 {
         return false;
     }
@@ -204,7 +219,7 @@ fn manager_valid(process: &native::Process, base: usize, address: usize) -> bool
         return false;
     };
     if data.len() < 0x90
-        || word(&data, 0) != Some(base + 0x90c3e28)
+        || word(&data, 0) != Some(anchor)
         || data[8] & 1 == 0
         || word(&data, 0x60).is_none_or(|n| n > 100000)
     {
@@ -227,17 +242,11 @@ pub fn inspect(c: &Config) -> Result<Profile> {
     let process = native::Process::bound(&binding)?;
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(None));
     if let Some((pid, birth, hwnd, p)) = cache.lock().unwrap().as_ref() {
-        let profile: Value = serde_json::from_str(PROFILE)?;
-        let prefix = hex::decode(
-            profile["functions"]["manager_dispatch"]["first_32_bytes"]
-                .as_str()
-                .unwrap_or(""),
-        )?;
         if *pid == binding.pid
             && *birth == binding.created_at.to_bits()
             && *hwnd == binding.hwnd
-            && manager_valid(&process, p.base, p.managers[0])
-            && process.read(p.base + 0x35ed80, 32).as_deref() == Some(prefix.as_slice())
+            && manager_valid(&process, p.anchor, p.managers[0])
+            && process.read(p.dispatch, 32).as_deref() == Some(p.dispatch_prefix.as_slice())
         {
             return Ok(p.clone());
         }
@@ -279,11 +288,7 @@ pub fn inspect(c: &Config) -> Result<Profile> {
         }
     }
     let (base, path) = module.context("绑定进程未载入Weixin.dll")?;
-    let profile: Value = serde_json::from_str(PROFILE)?;
-    if hex::encode(Sha256::digest(std::fs::read(path)?)) != profile["sha256"].as_str().unwrap_or("")
-    {
-        bail!("当前微信版本不在音乐原生后端的已核对版本中")
-    }
+    let profile = profile_for(&path)?;
     for f in profile["functions"]
         .as_object()
         .context("原生音乐版本资料无效")?
@@ -301,9 +306,29 @@ pub fn inspect(c: &Config) -> Result<Profile> {
             bail!("微信音乐后端函数与已核对版本不同，未调用")
         }
     }
-    let needle = (base + 0x90c3e28).to_le_bytes().to_vec();
+    let anchor_rva = usize::from_str_radix(
+        profile["manager_anchor"]
+            .as_str()
+            .context("missing manager_anchor")?
+            .trim_start_matches("0x"),
+        16,
+    )?;
+    let dispatch_rva = usize::from_str_radix(
+        profile["functions"]["manager_dispatch"]["rva"]
+            .as_str()
+            .context("missing manager_dispatch")?
+            .trim_start_matches("0x"),
+        16,
+    )?;
+    let dispatch_prefix = hex::decode(
+        profile["functions"]["manager_dispatch"]["first_32_bytes"]
+            .as_str()
+            .context("missing manager_dispatch bytes")?,
+    )?;
+    let anchor = base + anchor_rva;
+    let needle = anchor.to_le_bytes().to_vec();
     let mut candidates = process.find(&[needle]).pop().unwrap_or_default();
-    candidates.retain(|&address| manager_valid(&process, base, address));
+    candidates.retain(|&address| manager_valid(&process, anchor, address));
     candidates.sort_unstable();
     candidates.dedup();
     if candidates.len() != 1 {
@@ -316,6 +341,10 @@ pub fn inspect(c: &Config) -> Result<Profile> {
         base,
         managers: candidates,
         pid: binding.pid,
+        anchor,
+        dispatch: base + dispatch_rva,
+        dispatch_prefix,
+        version: profile["version"].as_str().unwrap_or("unknown").to_owned(),
     };
     *cache.lock().unwrap() = Some((
         binding.pid,
@@ -328,7 +357,7 @@ pub fn inspect(c: &Config) -> Result<Profile> {
 pub fn probe(c: &Config) -> Result<Value> {
     let p = inspect(c)?;
     Ok(
-        json!({"version":"4.2.0.9","bound_pid":p.pid,"module_hash_and_loaded_code_match":true,"enabled_manager_count":p.managers.len(),"native_functions_called":false,"clipboard_accessed":false,"global_input_used":false}),
+        json!({"version":p.version,"bound_pid":p.pid,"module_hash_and_loaded_code_match":true,"enabled_manager_count":p.managers.len(),"native_functions_called":false,"clipboard_accessed":false,"global_input_used":false}),
     )
 }
 
@@ -382,6 +411,7 @@ pub fn rpc(c: &Config, mut request: Value) -> Result<Value> {
         request["pid"] = p.pid.into();
         request["base"] = (p.base as u64).into();
         request["manager"] = (p.managers[0] as u64).into();
+        request["profile"] = p.version.clone().into();
         let bytes = serde_json::to_vec(&request)?;
         let module = crate::popup::load_embedded(&c.path.parent().unwrap().join("data"))?;
         let function = GetProcAddress(module, PCSTR(c"MusicCgiHook".as_ptr() as _))

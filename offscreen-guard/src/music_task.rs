@@ -58,9 +58,11 @@ unsafe fn word(ptr: usize, offset: usize) -> usize {
 }
 unsafe fn holder(base: usize, h: usize) -> Result<&'static [u8], String> {
     unsafe {
-        let size: unsafe extern "system" fn(usize) -> u32 = std::mem::transmute(base + 0x6a7f70);
+        let p = crate::profile::current()?;
+        let size: unsafe extern "system" fn(usize) -> u32 =
+            std::mem::transmute(base + crate::profile::rva(p, "holder_size")?);
         let data: unsafe extern "system" fn(usize, i32) -> usize =
-            std::mem::transmute(base + 0x6a7f40);
+            std::mem::transmute(base + crate::profile::rva(p, "holder_data")?);
         let len = size(h) as usize;
         let p = data(h, 0);
         if len == 0 || len > 1024 * 1024 || p == 0 {
@@ -86,8 +88,9 @@ unsafe extern "system" fn serialize(
             let original = holder(e.base, h)?;
             crate::music_wire::native_base_only(original)?;
             let before = original.len();
+            let p = crate::profile::current()?;
             let write: unsafe extern "system" fn(usize, *const u8, u32) -> u32 =
-                std::mem::transmute(e.base + 0x6a7f00);
+                std::mem::transmute(e.base + crate::profile::rva(p, "holder_write")?);
             write(h, e.appmsg.as_ptr(), e.appmsg.len() as u32);
             let after = holder(e.base, h)?;
             if after.len() != before + e.appmsg.len() || &after[before..] != e.appmsg {
@@ -143,10 +146,13 @@ unsafe extern "system" fn response(task: usize, h: usize) -> u8 {
 unsafe extern "system" fn destroy(task: usize, flags: u32) -> usize {
     unsafe {
         let e = registry().lock().ok().and_then(|mut r| r.remove(&task));
-        let original = e
-            .as_ref()
-            .map(|e| e.original[0])
-            .unwrap_or_else(|| BASE.get().copied().unwrap_or(0) + 0x3ae94c0);
+        let original = e.as_ref().map(|e| e.original[0]).unwrap_or_else(|| {
+            let base = BASE.get().copied().unwrap_or(0);
+            crate::profile::current()
+                .and_then(|p| crate::profile::rva(p, "task_dtor"))
+                .map(|rva| base + rva)
+                .unwrap_or(0)
+        });
         let native: Dtor = std::mem::transmute(original);
         let result = native(task, flags);
         DESTROYED.fetch_add(1, Ordering::Relaxed);
@@ -156,8 +162,12 @@ unsafe extern "system" fn destroy(task: usize, flags: u32) -> usize {
 unsafe extern "system" fn callback_copy(this: usize, dest: usize) -> usize {
     unsafe {
         let dest = if dest == 0 {
+            let p = crate::profile::current().ok();
+            let rva = p
+                .and_then(|p| crate::profile::rva(p, "operator_new").ok())
+                .unwrap_or(0);
             let alloc: unsafe extern "system" fn(usize) -> usize =
-                std::mem::transmute(BASE.get().copied().unwrap() + 0x76970bc);
+                std::mem::transmute(BASE.get().copied().unwrap() + rva);
             alloc(16)
         } else {
             dest
@@ -216,8 +226,11 @@ unsafe extern "system" fn callback_type(_: usize) -> usize {
 unsafe extern "system" fn callback_delete(this: usize, free: u8) {
     unsafe {
         if free != 0 {
-            let delete: unsafe extern "system" fn(usize) =
-                std::mem::transmute(BASE.get().copied().unwrap() + 0x76970f8);
+            let base = BASE.get().copied().unwrap();
+            let rva = crate::profile::current()
+                .and_then(|p| crate::profile::rva(p, "operator_delete"))
+                .unwrap_or(0);
+            let delete: unsafe extern "system" fn(usize) = std::mem::transmute(base + rva);
             delete(this)
         }
     }
@@ -228,6 +241,7 @@ unsafe extern "system" fn callback_target(this: usize) -> usize {
 static CALLBACK: OnceLock<[usize; 6]> = OnceLock::new();
 pub unsafe fn submit(base: usize, v: &Value) -> Result<(), String> {
     unsafe {
+        let p = crate::profile::current()?;
         if registry().lock().map_err(|_| "音乐任务锁异常")?.len() >= 32 {
             return Err("原生音乐未结束任务已达上限，未提交".into());
         }
@@ -240,7 +254,7 @@ pub unsafe fn submit(base: usize, v: &Value) -> Result<(), String> {
         ) == 0
             || mbi.State != MEM_COMMIT
             || mbi.Protect.0 & PAGE_GUARD.0 != 0
-            || word(manager, 0) != base + 0x90c3e28
+            || word(manager, 0) != base + p.manager_anchor
             || (*((manager + 8) as *const u8) & 1) == 0
         {
             return Err("音乐管理器已失效，未提交".into());
@@ -298,7 +312,7 @@ pub unsafe fn submit(base: usize, v: &Value) -> Result<(), String> {
         let _ = BASE.set(base);
         TYPE.get_or_init(|| {
             let native: unsafe extern "system" fn(usize) -> usize =
-                std::mem::transmute(base + 0x3ae95f0);
+                std::mem::transmute(base + crate::profile::rva(p, "callback_type").unwrap());
             let mut name = [0u8; 64];
             let s = b".?AVWechatRedReplyMusicCompletion@@";
             name[..s.len()].copy_from_slice(s);
@@ -319,7 +333,11 @@ pub unsafe fn submit(base: usize, v: &Value) -> Result<(), String> {
             ]
         });
         let mut original = [0usize; 6];
-        std::ptr::copy_nonoverlapping((base + 0x9806818) as *const usize, original.as_mut_ptr(), 6);
+        std::ptr::copy_nonoverlapping(
+            (base + p.task_vtable) as *const usize,
+            original.as_mut_ptr(),
+            6,
+        );
         let mut vt = original;
         vt[0] = destroy as *const () as usize;
         vt[1] = serialize as *const () as usize;
@@ -338,8 +356,9 @@ pub unsafe fn submit(base: usize, v: &Value) -> Result<(), String> {
             revoke,
         });
         let alloc: unsafe extern "system" fn(usize) -> usize =
-            std::mem::transmute(base + 0x76970bc);
-        let ctor: unsafe extern "system" fn(usize, usize) = std::mem::transmute(base + 0x3ae92f0);
+            std::mem::transmute(base + crate::profile::rva(p, "operator_new")?);
+        let ctor: unsafe extern "system" fn(usize, usize) =
+            std::mem::transmute(base + crate::profile::rva(p, "task_ctor")?);
         let task = alloc(0x178);
         if task == 0 {
             return Err("音乐任务分配失败".into());
@@ -373,7 +392,7 @@ pub unsafe fn submit(base: usize, v: &Value) -> Result<(), String> {
             1,
         );
         let dispatch: unsafe extern "system" fn(usize, usize) =
-            std::mem::transmute(base + 0x35ed80);
+            std::mem::transmute(base + crate::profile::rva(p, "manager_dispatch")?);
         SUBMITTED.fetch_add(1, Ordering::Relaxed);
         dispatch(manager, task);
         Ok(())

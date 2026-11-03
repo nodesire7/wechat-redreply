@@ -10,7 +10,7 @@ use windows::{
     core::{PCWSTR, w},
 };
 const MAGIC: usize = 0x574d555349433432;
-const PROFILE: &str = include_str!("../../assets/music-cgi-4.2.0.9.json");
+use crate::profile;
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
@@ -58,23 +58,14 @@ unsafe fn check(v: &Value) -> Result<usize, String> {
         if v["base"].as_u64() != Some(base as u64) {
             return Err("音乐通道模块地址不匹配".into());
         }
-        let p: Value = serde_json::from_str(PROFILE).map_err(|_| "音乐版本资料无效")?;
-        for f in p["functions"]
-            .as_object()
-            .ok_or("音乐版本资料无效")?
-            .values()
-        {
-            let rva =
-                usize::from_str_radix(f["rva"].as_str().ok_or("rva")?.trim_start_matches("0x"), 16)
-                    .map_err(|_| "rva")?;
-            let hex = f["first_32_bytes"].as_str().ok_or("bytes")?;
-            let bytes = (0..32)
-                .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
-                .collect::<Vec<_>>();
+        let version = v["profile"].as_str().ok_or("音乐版本缺失")?;
+        let p = profile::load(version)?;
+        for (_, (rva, bytes)) in profile::functions(&p) {
             if std::slice::from_raw_parts((base + rva) as *const u8, 32) != bytes {
                 return Err("音乐通道代码版本不符，未调用".into());
             }
         }
+        profile::install(p);
         Ok(base)
     }
 }
@@ -83,9 +74,10 @@ unsafe fn construct(base: usize) -> Result<Value, String> {
         type New = unsafe extern "system" fn(usize) -> usize;
         type Ctor = unsafe extern "system" fn(usize, usize);
         type Dtor = unsafe extern "system" fn(usize, u32) -> usize;
-        let new: New = std::mem::transmute(base + 0x76970bc);
-        let ctor: Ctor = std::mem::transmute(base + 0x3ae92f0);
-        let dtor: Dtor = std::mem::transmute(base + 0x3ae94c0);
+        let p = profile::current()?;
+        let new: New = std::mem::transmute(base + profile::rva(p, "operator_new")?);
+        let ctor: Ctor = std::mem::transmute(base + profile::rva(p, "task_ctor")?);
+        let dtor: Dtor = std::mem::transmute(base + profile::rva(p, "task_dtor")?);
         let task = new(0x178);
         if task == 0 {
             return Err("原生任务分配失败".into());
@@ -100,7 +92,7 @@ unsafe fn construct(base: usize) -> Result<Value, String> {
         info[7] = 1;
         ctor(task, info.as_ptr() as usize);
         let vt = word(task, 0);
-        let ok = vt == base + 0x9806818
+        let ok = vt == base + p.task_vtable
             && std::ptr::read_unaligned((task + 12) as *const u32) == 222
             && std::ptr::read_unaligned((task + 16) as *const u32) == 1
             && word(task, 0x98) == 0;

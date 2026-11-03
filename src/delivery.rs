@@ -651,7 +651,7 @@ impl Automation {
         if matches!(&job.operation, crate::actions::Operation::Send)
             && job.parts.iter().all(|p| matches!(p, Part::Music(_)))
         {
-            let current = native::Process::bound(&binding)?.account_root()?;
+            let current = crate::database::account_root(&c, &native::Process::bound(&binding)?)?;
             if shared
                 .bound_root
                 .read()
@@ -681,7 +681,7 @@ impl Automation {
             let _guard = crate::popup::Guard::install(h, &shared.data)?;
             self.cancel_actions(h, &shared.data);
         }
-        let current = native::Process::bound(&binding)?.account_root()?;
+        let current = crate::database::account_root(&c, &native::Process::bound(&binding)?)?;
         if shared
             .bound_root
             .read()
@@ -757,7 +757,7 @@ impl Automation {
                 bail!("发送动作过期、连接断开或目标已移出白名单");
             }
             let process = native::Process::bound(&binding)?;
-            let account = process.account_root()?;
+            let account = crate::database::account_root(&shared.config.read().unwrap(), &process)?;
             let bound = shared.bound_root.read().unwrap();
             if bound
                 .as_ref()

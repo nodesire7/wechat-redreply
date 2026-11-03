@@ -1181,7 +1181,10 @@ impl Automation {
             return Ok(());
         }
         let c = shared.config.read().unwrap().clone();
-        let current = crate::native::Process::bound(&c.binding()?)?.account_root()?;
+        let current = match c.raw["account_root"].as_str() {
+            Some(path) if !path.trim().is_empty() => std::path::PathBuf::from(path),
+            _ => crate::native::Process::bound(&c.binding()?)?.account_root()?,
+        };
         if shared
             .bound_root
             .read()

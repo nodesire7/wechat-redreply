@@ -4,6 +4,7 @@ mod music_cgi;
 mod music_task;
 #[path = "../../src/music_wire.rs"]
 mod music_wire;
+mod profile;
 use windows::{
     Win32::{Foundation::*, System::LibraryLoader::*, UI::WindowsAndMessaging::*},
     core::w,

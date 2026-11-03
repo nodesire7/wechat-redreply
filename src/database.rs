@@ -276,7 +276,10 @@ impl Database {
     }
     pub fn new(c: &Config, data: &Path) -> Result<Self> {
         let process = Process::bound(&c.binding()?)?;
-        let root = process.account_root()?;
+        let root = match c.raw["account_root"].as_str() {
+            Some(path) if !path.trim().is_empty() => PathBuf::from(path),
+            _ => process.account_root()?,
+        };
         let normalized = root
             .to_string_lossy()
             .trim_start_matches(r"\\?\")
@@ -596,7 +599,7 @@ pub fn run(shared: Arc<Shared>) -> Result<()> {
             if shared.account_checked.load(Ordering::Relaxed) + 1000
                 < (config::now() * 1000.) as u64
             {
-                let current = bound.account_root()?;
+                let current = account_root(&initial, &bound)?;
                 if !same_root(&current, &db.root) {
                     bail!("微信登录账号已改变，请重新绑定；未切换账号");
                 }
@@ -773,6 +776,12 @@ pub fn same_root(a: &Path, b: &Path) -> bool {
     a.to_string_lossy()
         .trim_start_matches(r"\\?\")
         .eq_ignore_ascii_case(b.to_string_lossy().trim_start_matches(r"\\?\"))
+}
+pub fn account_root(c: &Config, process: &crate::native::Process) -> Result<PathBuf> {
+    match c.raw["account_root"].as_str() {
+        Some(path) if !path.trim().is_empty() => Ok(PathBuf::from(path)),
+        _ => process.account_root(),
+    }
 }
 fn note_view(
     db: &mut Database,

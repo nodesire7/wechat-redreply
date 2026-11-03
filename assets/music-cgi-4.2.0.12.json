@@ -1,0 +1,121 @@
+{
+  "version": "4.2.0.12",
+  "sha256": "2b3677c3f932daaa4ef84c8b2acd0aee12cbe5a779ff9e740c370761e5c291ce",
+  "manager_anchor": "0x90d1e68",
+  "functions": {
+    "appmsg_submit": {
+      "rva": "0x3aef4a0",
+      "first_32_bytes": "554157415641545657534883ec70488d6c247048c745f8feffffff4c89cf4c89"
+    },
+    "task_ctor": {
+      "rva": "0x3aef7e0",
+      "first_32_bytes": "5541565657534883ec40488d6c244048c745f8feffffff4889d648c741080000"
+    },
+    "task_dtor": {
+      "rva": "0x3aef9b0",
+      "first_32_bytes": "56574883ec2889d74889ce488d05664fd2054889014881c110010000e82ff517"
+    },
+    "serialize": {
+      "rva": "0xf283e0",
+      "first_32_bytes": "555657534883ec48488d6c244048c74500feffffff4c89cf4889d64889cb488b"
+    },
+    "response": {
+      "rva": "0xf284d0",
+      "first_32_bytes": "5657534883ec204889d64889cf4881c7100100004889d1e8640978ff89c34889"
+    },
+    "get_request": {
+      "rva": "0x115010",
+      "first_32_bytes": "488d81a8000000c3cccccccccccccccc488d81d8000000c3cccccccccccccccc"
+    },
+    "get_response": {
+      "rva": "0xf28510",
+      "first_32_bytes": "488d8110010000c3cccccccccccccccc56574883ec2889d74889ce488d05f624"
+    },
+    "prepare_base_request": {
+      "rva": "0xf28570",
+      "first_32_bytes": "5541565657534883ec60488d6c246048c745f8feffffff4889cec70201000000"
+    },
+    "request_ctor": {
+      "rva": "0x5c541c0",
+      "first_32_bytes": "4889c8488d0d7eedf80348890848c74060000000000f57c00f114008488d0d8d"
+    },
+    "response_ctor": {
+      "rva": "0x5c54210",
+      "first_32_bytes": "4889c8488d0dbeedf80348890848c740600000000048c7400800000000488d0d"
+    },
+    "holder_write": {
+      "rva": "0x6a8de0",
+      "first_32_bytes": "5657534883ec204489c64889d74889cb4489c2e8f8feffff488b034863480c48"
+    },
+    "holder_size": {
+      "rva": "0x6a8e50",
+      "first_32_bytes": "488b018b400cc3cccccccccccccccccc488b01488b00c3cccccccccccccccccc"
+    },
+    "holder_data": {
+      "rva": "0x6a8e20",
+      "first_32_bytes": "56574883ec2889d64c8b01412b500c7e0b4889cfe8b7feffff4c8b074863c649"
+    },
+    "holder_ctor": {
+      "rva": "0x6a8c30",
+      "first_32_bytes": "564883ec204889ceb918000000e87ac7ff064889060f57c00f110048c7401000"
+    },
+    "holder_dtor": {
+      "rva": "0x6a8c60",
+      "first_32_bytes": "564883ec204889ce488b01488b084885c97412807814017507e8cad41907eb05"
+    },
+    "operator_new": {
+      "rva": "0x76a53bc",
+      "first_32_bytes": "40534883ec20488bd9eb0f488bcbe8e1cd180085c07413488bcbe899361a0048"
+    },
+    "operator_delete": {
+      "rva": "0x76a53f8",
+      "first_32_bytes": "e94b0d1a00cccccce9f3ffffffcccccc40534883ec20488d058b479e01488bd9"
+    },
+    "manager_ctor": {
+      "rva": "0x3590c0",
+      "first_32_bytes": "555657534881eca8000000488dac24800000000f29751048c74508feffffff48"
+    },
+    "manager_dtor": {
+      "rva": "0x361a80",
+      "first_32_bytes": "56574883ec2889d74889ce488d057603d708488901488d05ac03d70848894108"
+    },
+    "manager_dispatch": {
+      "rva": "0x35ed80",
+      "first_32_bytes": "5541574156415541545657534881ec98040000488dac24800000000f29b50004"
+    },
+    "manager_complete": {
+      "rva": "0x360ea0",
+      "first_32_bytes": "5541574156415541545657534881ec18020000488dac24800000000f29b58001"
+    },
+    "task_base_dtor": {
+      "rva": "0x114e20",
+      "first_32_bytes": "564883ec204889ce488d05a9f8f408488901488b89980000004885c97410488d"
+    },
+    "callback_copy": {
+      "rva": "0x3aefa00",
+      "first_32_bytes": "4889d0488d15ae4fd2054889100f57c00f114008488b51104885d27404f0ff42"
+    },
+    "callback_move": {
+      "rva": "0x3aefa60",
+      "first_32_bytes": "4889d0488d154e4fd2054889100f57c00f114008488b51104885d27404f0ff42"
+    },
+    "callback_call": {
+      "rva": "0x3aefac0",
+      "first_32_bytes": "4883c108458b09458b00488b12e91e000000cccccccccccccccccccccccccccc"
+    },
+    "callback_type": {
+      "rva": "0x3aefae0",
+      "first_32_bytes": "488d050982e307c3cccccccccccccccc55415741565657534883ec68488d6c24"
+    },
+    "callback_delete": {
+      "rva": "0x115770",
+      "first_32_bytes": "5657534883ec2089d34889ce488b79284885ff741df0ff4f087517488b074889"
+    },
+    "callback_target": {
+      "rva": "0x9ec0",
+      "first_32_bytes": "488d4108c3cccccccccccccccccccccc4889d0488d0dde1c010948890ac3cccc"
+    }
+  },
+  "task_vtable": "0x9814928",
+  "callback_vtable": "0x98149b8"
+}

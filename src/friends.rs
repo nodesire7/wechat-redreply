@@ -286,7 +286,7 @@ pub fn poll(shared: &Shared, a: &Automation) -> Result<usize> {
     {
         bail!("好友申请仅在绑定微信完全离屏时处理");
     }
-    let current = native::Process::bound(&binding)?.account_root()?;
+    let current = crate::database::account_root(&c, &native::Process::bound(&binding)?)?;
     let identity = hex::encode(Sha256::digest(
         current
             .to_string_lossy()
