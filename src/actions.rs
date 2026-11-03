@@ -219,6 +219,10 @@ pub fn nodes(value: &Value, shared: &Shared) -> Result<Vec<Node>> {
     Ok(result)
 }
 pub fn forward_parts(nodes: &[Node], shared: &Shared) -> Result<Vec<Part>> {
+    // Keep each staging message well under WeChat's body limit. Splitting long
+    // movie text into several messages is also what makes native multi-select
+    // reliable: a single short staging row is often not selectable.
+    const CHUNK: usize = 1000;
     let mut out = vec![];
     for node in nodes {
         let segments = if let Some(text) = node.content.as_str() {
@@ -234,10 +238,10 @@ pub fn forward_parts(nodes: &[Node], shared: &Shared) -> Result<Vec<Part>> {
             if segment["type"] == "text" {
                 let text = segment["data"]["text"].as_str().context("节点文本无效")?;
                 for line in text.split_inclusive('\n') {
-                    if line.chars().count() > 3500 {
+                    if line.chars().count() > CHUNK {
                         bail!("单行节点超过微信正文限制，未拆断链接或降级发送");
                     }
-                    if buffer.chars().count() + line.chars().count() > 3500 {
+                    if buffer.chars().count() + line.chars().count() > CHUNK {
                         out.push(Part::Text(std::mem::take(&mut buffer)));
                     }
                     buffer.push_str(line);
@@ -251,6 +255,21 @@ pub fn forward_parts(nodes: &[Node], shared: &Shared) -> Result<Vec<Part>> {
         }
         if !buffer.is_empty() {
             out.push(Part::Text(buffer));
+        }
+    }
+    // A one-row staging area cannot reliably enter native multi-select. Split
+    // any substantial single text row into two rows so the existing
+    // multi-select + merge path always has more than one anchor.
+    if out.len() == 1 {
+        if let Some(Part::Text(text)) = out.first() {
+            let chars: Vec<char> = text.chars().collect();
+            if chars.len() > 400 {
+                let mid = chars.len() / 2;
+                let split = (1..mid).rev().find(|&i| chars[i] == '\n').unwrap_or(mid);
+                let head: String = chars[..split].iter().collect();
+                let tail: String = chars[split..].iter().collect();
+                out = vec![Part::Text(head), Part::Text(tail)];
+            }
         }
     }
     if out.len() > 20 {
