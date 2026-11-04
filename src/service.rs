@@ -263,6 +263,7 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
         "forward",
         "forward-and-recall",
         "image-and-recall",
+        "voice-and-recall",
         "scheduled-recall",
         "locate-only",
         "virtualized-recall",
@@ -376,7 +377,7 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
             let nodes = crate::actions::nodes(&data, &shared)?;
             let parts = crate::actions::forward_parts(&nodes, &shared)?;
             (crate::actions::Operation::Forward(nodes), parts)
-        } else if mode == "image-and-recall" {
+        } else if mode == "image-and-recall" || mode == "voice-and-recall" {
             let message = config
                 .raw
                 .get("native_test_message")
@@ -418,6 +419,13 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
             Ok(())
         });
         input_phases.push(snapshot("after_capture"));
+        if mode == "voice-and-recall" {
+            let hold = config.raw["native_test_hold_seconds"]
+                .as_u64()
+                .unwrap_or(0)
+                .min(60);
+            std::thread::sleep(Duration::from_secs(hold));
+        }
         if mode == "scheduled-recall" {
             let delay = config.raw["native_test_delay_ms"].as_f64().unwrap_or(5000.);
             crate::actions::schedule(&shared, id, delay)?;
@@ -445,7 +453,7 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
             input_phases.push(snapshot("after_recall"));
         }
         Ok(
-            json!({"mode":mode,"target":name,"group":group,"message_id":id,"send_seconds":sent,"total_seconds":started.elapsed().as_secs_f64(),"database_confirmed":true,"recall_confirmed":mode.ends_with("recall"),"initial_chat_title_available":initial_chat_title}),
+            json!({"mode":mode,"target":name,"group":group,"message_id":id,"send_seconds":sent,"total_seconds":started.elapsed().as_secs_f64(),"confirmation":crate::delivery::confirmation(&job.parts),"database_confirmed":crate::delivery::confirmation(&job.parts)=="database","native_server_confirmed":crate::delivery::confirmation(&job.parts)!="database","recall_confirmed":mode.ends_with("recall"),"initial_chat_title_available":initial_chat_title}),
         )
     })();
     if result.is_err() {
@@ -572,6 +580,15 @@ pub fn entry() -> Result<()> {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
         )?;
+        if let Some(path) = option("--report") {
+            config::atomic(std::path::Path::new(&path), &value)?;
+        }
+        println!("{value}");
+        return Ok(());
+    }
+    if args.iter().any(|s| s == "--voice-probe") {
+        crate::voice::inspect(&config)?;
+        let value = crate::music_backend::rpc(&config, json!({"mode":"voice_construct"}))?;
         if let Some(path) = option("--report") {
             config::atomic(std::path::Path::new(&path), &value)?;
         }

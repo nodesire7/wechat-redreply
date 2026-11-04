@@ -75,8 +75,8 @@ pub fn run(config: Config) -> Result<()> {
         .with_title("微信 · 红色问答")
         .with_decorations(false)
         .with_resizable(true)
-        .with_inner_size(LogicalSize::new(1280., 900.))
-        .with_min_inner_size(LogicalSize::new(1020., 800.))
+        .with_inner_size(LogicalSize::new(1160., 780.))
+        .with_min_inner_size(LogicalSize::new(960., 680.))
         .with_window_icon(window_icon()?)
         .build(&event_loop)
         .context("创建 WebView2 窗口")?;
@@ -254,14 +254,12 @@ fn json_response(stream: &mut TcpStream, value: &Value) -> Result<()> {
 }
 
 fn err_response(stream: &mut TcpStream, status: &str, error: impl std::fmt::Display) -> Result<()> {
-    json_response(stream, &json!({"error": error.to_string()})).or_else(|_| {
-        response(
-            stream,
-            status,
-            "application/json; charset=utf-8",
-            br#"{"error":"request failed"}"#,
-        )
-    })
+    response(
+        stream,
+        status,
+        "application/json; charset=utf-8",
+        json!({"error": error.to_string()}).to_string().as_bytes(),
+    )
 }
 
 fn handle(backend: &Backend, mut stream: TcpStream) -> Result<()> {
@@ -274,11 +272,13 @@ fn handle(backend: &Backend, mut stream: TcpStream) -> Result<()> {
         })
     };
     let supplied = param("token")
+        .filter(|s| !s.is_empty())
         .or_else(|| {
             headers
                 .iter()
                 .find(|(n, _)| n == "x-token")
                 .map(|(_, v)| v.clone())
+                .filter(|s| !s.is_empty())
         })
         .or_else(|| {
             headers
@@ -292,6 +292,15 @@ fn handle(backend: &Backend, mut stream: TcpStream) -> Result<()> {
                     })
                 })
         });
+    if matches!(path, "/" | "/next" | "/classic")
+        && supplied.as_deref() != Some(backend.token.as_str())
+    {
+        return err_response(
+            &mut stream,
+            "403 Forbidden",
+            "会话未授权；请从程序窗口打开设置",
+        );
+    }
     match (method.as_str(), path) {
         ("GET", "/next") => {
             return response_cookie(
@@ -352,10 +361,14 @@ fn handle(backend: &Backend, mut stream: TcpStream) -> Result<()> {
     let value = if body.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice::<Value>(&body).context("请求 JSON 无效")?
+        match serde_json::from_slice::<Value>(&body) {
+            Ok(value) => value,
+            Err(_) => return err_response(&mut stream, "400 Bad Request", "请求 JSON 无效"),
+        }
     };
     let result = match (method.as_str(), path) {
         ("GET", "/api/state") => state_json(backend),
+        ("GET", "/api/capabilities") => Ok(crate::compat::capabilities()),
         ("GET", "/api/status") => status_json(backend),
         ("GET", "/api/jobs") => jobs_json(backend),
         ("POST", "/api/recall") => recall_job(backend, &value),
@@ -420,6 +433,7 @@ fn config_json(c: &Config) -> Value {
         "recall_limit": crate::actions::recall_limit(&c.raw),
         "forward_staging_chat": c.raw["forward_staging_chat"].as_str().unwrap_or(""),
         "friend_accept": c.raw["friend_requests_auto_accept"].as_bool().unwrap_or(false),
+        "music_link_mode": c.raw["music_link_mode"].as_str().unwrap_or("audio"),
         "scope_ids": ids,
         "url": c.url()
     })
@@ -438,7 +452,7 @@ fn state_json(backend: &Backend) -> Result<Value> {
 fn jobs_json(backend: &Backend) -> Result<Value> {
     let c = backend.config.lock().unwrap().clone();
     let data = c.path.parent().unwrap().join("data");
-    let jobs = crate::outbox::gui_jobs(&data, 60).unwrap_or_else(|_| json!([]));
+    let jobs = crate::outbox::gui_jobs(&data, 200, crate::actions::recall_limit(&c.raw))?;
     Ok(json!({"jobs": jobs}))
 }
 
@@ -446,18 +460,25 @@ fn recall_job(backend: &Backend, value: &Value) -> Result<Value> {
     let id = value["message_id"].as_u64().context("缺少 message_id")?;
     let c = backend.config.lock().unwrap().clone();
     let data = c.path.parent().unwrap().join("data");
-    crate::outbox::gui_request_recall(&data, id)
+    crate::outbox::gui_request_recall(&data, id, crate::actions::recall_limit(&c.raw))
 }
 
 fn status_json(backend: &Backend) -> Result<Value> {
     let c = backend.config.lock().unwrap().clone();
     let status = crate::gui::state(&c);
-    let outbox = crate::outbox::gui_summary(&c.path.parent().unwrap().join("data"))
-        .unwrap_or_else(|_| json!({}));
+    let (outbox, outbox_error) =
+        match crate::outbox::gui_summary(&c.path.parent().unwrap().join("data")) {
+            Ok(value) => (value, Value::Null),
+            Err(_) => (
+                Value::Null,
+                json!("发送统计暂不可用，请检查数据文件或稍后刷新"),
+            ),
+        };
     Ok(json!({
         "status": status,
         "binding": binding_json(&c),
         "outbox": outbox,
+        "outbox_error": outbox_error,
         "version": env!("CARGO_PKG_VERSION")
     }))
 }
@@ -483,6 +504,7 @@ fn windows_json(backend: &Backend) -> Result<Value> {
 
 fn save(backend: &Backend, value: &Value) -> Result<Value> {
     let mut c = backend.config.lock().unwrap().clone();
+    let old = c.clone();
     let rr = c.raw["redreply"]
         .as_object_mut()
         .context("配置缺少 redreply")?;
@@ -543,16 +565,29 @@ fn save(backend: &Backend, value: &Value) -> Result<Value> {
     if let Some(v) = value.get("friend_accept").and_then(Value::as_bool) {
         c.raw["friend_requests_auto_accept"] = json!(v);
     }
+    if let Some(v) = value.get("music_link_mode").and_then(Value::as_str) {
+        if !matches!(v, "audio" | "source") {
+            bail!("音乐卡跳转方式无效");
+        }
+        c.raw["music_link_mode"] = json!(v);
+    }
     c.raw["receive_backend"] = "database".into();
     c.raw["offscreen_mode"] = true.into();
     c.raw["require_fully_hidden"] = true.into();
     c.validate()?;
     config::atomic(&c.path, &c.raw)?;
     *backend.config.lock().unwrap() = c.clone();
+    let restarting = old.r() != c.r() && crate::gui::state(&old)["running"] == true;
+    if restarting {
+        crate::gui::stop_and_wait(&c)
+            .and_then(|_| crate::gui::start(&c))
+            .context("配置已保存，但监听重启失败；请修正后重新启动")?;
+    }
     Ok(json!({
         "config": config_json(&c),
         "binding": binding_json(&c),
-        "notice": "设置已保存，白名单和查询间隔自动应用"
+        "restart_requested": restarting,
+        "notice": if restarting {"设置已保存，正在重启监听以应用连接参数"} else {"设置已保存，白名单和查询间隔自动应用"}
     }))
 }
 
@@ -566,9 +601,15 @@ fn bind(backend: &Backend, value: &Value) -> Result<Value> {
     native::validate_window(&window.binding)?;
     native::offscreen(native::validate_window(&window.binding)?)?;
     let mut c = backend.config.lock().unwrap().clone();
+    let running = crate::gui::state(&c)["running"] == true;
     c.raw["wechat_binding"] = serde_json::to_value(&window.binding)?;
     config::atomic(&c.path, &c.raw)?;
     *backend.config.lock().unwrap() = c.clone();
+    if running {
+        crate::gui::stop_and_wait(&c)
+            .and_then(|_| crate::gui::start(&c))
+            .context("新账号已保存，但监听未能重启；请手动启动")?;
+    }
     Ok(json!({
         "config": config_json(&c),
         "binding": binding_json(&c),
@@ -592,12 +633,7 @@ fn contacts(backend: &Backend) -> Result<Value> {
 fn start(backend: &Backend) -> Result<Value> {
     let c = backend.config.lock().unwrap().clone();
     native::validate_window(&c.binding()?)?;
-    let worker = c.clone();
-    thread::Builder::new()
-        .name("gui-web-start".into())
-        .spawn(move || {
-            let _ = crate::gui::start(&worker);
-        })?;
+    crate::gui::start(&c)?;
     Ok(json!({"notice":"监听正在启动，微信数据库就绪后自动接收。"}))
 }
 
@@ -673,4 +709,95 @@ fn logs(backend: &Backend, filter: Option<i32>) -> Result<Value> {
         crate::telemetry::read(&data, filter)
     };
     Ok(json!({"text":text}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn exchange(backend: Arc<Backend>, request: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let worker = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle(&backend, stream).unwrap();
+        });
+        client.write_all(request.as_bytes()).unwrap();
+        let mut result = String::new();
+        client.read_to_string(&mut result).unwrap();
+        worker.join().unwrap();
+        result
+    }
+    fn backend(path: &std::path::Path) -> Arc<Backend> {
+        let c = Config::default(path.join("config.json"));
+        config::atomic(&c.path, &c.raw).unwrap();
+        Arc::new(Backend {
+            config: Mutex::new(c),
+            token: "test-only-session".into(),
+            proxy: Mutex::new(None),
+        })
+    }
+    #[test]
+    fn real_gui_http_cookie_refresh_and_errors_match_actual_results() {
+        let d = tempfile::tempdir().unwrap();
+        let backend = backend(d.path());
+        let denied = exchange(
+            backend.clone(),
+            "GET /api/state HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        );
+        assert!(denied.starts_with("HTTP/1.1 403"));
+        let denied = exchange(backend.clone(), "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert!(denied.starts_with("HTTP/1.1 403"));
+        let allowed = exchange(
+            backend.clone(),
+            "GET /api/state?token= HTTP/1.1\r\nHost: localhost\r\nX-Token: \r\nCookie: gui_token=test-only-session\r\n\r\n",
+        );
+        assert!(allowed.starts_with("HTTP/1.1 200"));
+        let value: Value = serde_json::from_str(allowed.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(value["binding"]["valid"], false);
+        let before = std::fs::read(d.path().join("config.json")).unwrap();
+        let body = r#"{"port":0}"#;
+        let invalid = exchange(
+            backend.clone(),
+            &format!(
+                "POST /api/save HTTP/1.1\r\nHost: localhost\r\nCookie: gui_token=test-only-session\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            ),
+        );
+        assert!(invalid.starts_with("HTTP/1.1 400"));
+        assert_eq!(before, std::fs::read(d.path().join("config.json")).unwrap());
+        let body =
+            r#"{"whitelist":["好友"],"group_whitelist":["同名群"],"music_link_mode":"audio"}"#;
+        let ok = exchange(
+            backend.clone(),
+            &format!(
+                "POST /api/save HTTP/1.1\r\nHost: localhost\r\nCookie: gui_token=test-only-session\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            ),
+        );
+        assert!(ok.starts_with("HTTP/1.1 200"));
+        let saved = config::load(&d.path().join("config.json")).unwrap();
+        assert_eq!(saved["whitelist"][0], "好友");
+        assert_eq!(saved["group_whitelist"][0], "同名群");
+        assert_eq!(saved["music_link_mode"], "audio");
+    }
+    #[test]
+    fn unreadable_queue_statistics_never_become_zero_success_counts() {
+        let d = tempfile::tempdir().unwrap();
+        let backend = backend(d.path());
+        assert_eq!(status_json(&backend).unwrap()["outbox"]["sent"], 0);
+        std::fs::create_dir_all(d.path().join("data")).unwrap();
+        std::fs::write(
+            d.path().join("data/outbox.sqlite3"),
+            b"invalid sqlite fixture",
+        )
+        .unwrap();
+        let value = status_json(&backend).unwrap();
+        assert!(value["outbox"].is_null());
+        assert!(value["outbox_error"].as_str().unwrap().contains("不可用"));
+    }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "wechat-redreply"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 license = "Apache-2.0"
 description = "Standalone Windows WeChat OneBot11 adapter for an existing RedReply"
@@ -35,6 +35,8 @@ tokio-rustls = "0.26"
 rustls-pemfile = "2"
 futures-util = { version = "0.3", features = ["sink"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+silk-rs-no-llvm = { git = "https://github.com/super1207/silk-rs-no-llvm", rev = "57c05c085390a12c3ca8d6cf59ea6e41ddec0471" }
+symphonia = { version = "=0.5.5", default-features = false, features = ["mp3", "aac", "isomp4", "wav", "pcm", "flac", "ogg", "vorbis"] }
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Memory", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_System_LibraryLoader", "Win32_System_DataExchange", "Win32_Storage_FileSystem", "Win32_Storage_Xps", "Win32_Security_Cryptography", "Win32_Security", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Shell"] }
 wry = "0.57.1"
 tao = "0.37.2"

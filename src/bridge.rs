@@ -48,7 +48,7 @@ impl Job {
             bail!("发送提交前已过期、停止、断线或目标已移出白名单；未提交");
         }
         if crate::outbox::cancelled(shared, self.id)? {
-            bail!("同一触发批次已请求撤回或到期，未继续提交");
+            bail!("该次输出已请求撤回或到期，未继续提交");
         }
         Ok(())
     }
@@ -286,6 +286,8 @@ fn api_until(
     request_deadline: Option<Instant>,
 ) -> Value {
     shared.event("protocol_request", &request);
+    let mut request = request;
+    let translated = crate::compat::rewrite(&mut request);
     let echo = request["echo"].clone();
     let c = shared.config.read().unwrap().clone();
     let deadline = (Instant::now() + Duration::from_secs_f64(c.timeout())).min(
@@ -294,6 +296,7 @@ fn api_until(
     let params = &request["params"];
     let action = request["action"].as_str().unwrap_or("");
     let result = (|| -> Result<Value> {
+        translated?;
         match action {
             "inject_message" => {
                 let text = params["text"].as_str().context("Missing text")?.to_owned();
@@ -324,6 +327,34 @@ fn api_until(
             "get_login_info" => Ok(
                 json!({"user_id":c.bot(),"nickname":c.r()["nickname"].as_str().unwrap_or("微信桥接")}),
             ),
+            "get_capabilities" => Ok(crate::compat::capabilities()),
+            "can_send_image" => Ok(json!({"yes":true})),
+            "can_send_record" => Ok(json!({"yes":crate::voice::inspect(&c).is_ok()})),
+            "get_stranger_info" => {
+                let id = numeric(&params["user_id"]);
+                let name = if id == c.bot() {
+                    c.r()["nickname"].as_str().unwrap_or("微信桥接").to_owned()
+                } else if let Some((name, _)) = c
+                    .scope()
+                    .into_iter()
+                    .find(|(n, g)| !g && config::contact_id(n) == id)
+                {
+                    name
+                } else {
+                    shared
+                        .members
+                        .lock()
+                        .unwrap()
+                        .values()
+                        .find_map(|m| {
+                            m.get(&id)
+                                .and_then(|v| v["nickname"].as_str())
+                                .map(str::to_owned)
+                        })
+                        .context("未知的微信用户ID")?
+                };
+                Ok(json!({"user_id":id,"nickname":name,"sex":"unknown","age":0}))
+            }
             "get_status" => Ok(
                 json!({"online":shared.connected()&&shared.ready.load(Ordering::SeqCst),"good":shared.ready.load(Ordering::SeqCst),"outbox":crate::outbox::summary(shared)?}),
             ),

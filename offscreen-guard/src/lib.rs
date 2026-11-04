@@ -5,6 +5,9 @@ mod music_task;
 #[path = "../../src/music_wire.rs"]
 mod music_wire;
 mod profile;
+mod voice_task;
+#[path = "../../src/voice_wire.rs"]
+mod voice_wire;
 use windows::{
     Win32::{Foundation::*, System::LibraryLoader::*, UI::WindowsAndMessaging::*},
     core::w,

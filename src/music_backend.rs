@@ -69,7 +69,10 @@ pub fn deliver(
     let sent_at = crate::config::now();
     let create_time = sent_at as u32;
     let client_id = format!("{to}_{create_time}_{local_id}");
-    let xml = crate::music::native_appmsg(&music.card, &music.app_id)?;
+    if !music.playback_verified {
+        crate::music::verify_playback(&music.card)?;
+    }
+    let xml = crate::music::native_appmsg_with_mode(&music.card, &music.app_id, music.link_mode)?;
     let mut receipt = Receipt {
         from,
         to,
@@ -138,7 +141,7 @@ pub fn recall(
         || sent_at > crate::config::now() + 1.
         || shared.stop.load(std::sync::atomic::Ordering::SeqCst)
     {
-        bail!("原生音乐撤回超过时限或正在停止，未提交")
+        bail!("原生消息撤回超过时限或正在停止，未提交")
     }
     let from = shared
         .staging
@@ -154,11 +157,11 @@ pub fn recall(
         .unwrap()
         .iter()
         .find(|p| p.name == name && p.group == group)
-        .context("音乐撤回目标身份未核验")?
+        .context("原生消息撤回目标身份未核验")?
         .wxid
         .clone();
     if from != receipt.from || target != receipt.to || !c.allows(name, group) {
-        bail!("音乐账号或目标发生变化，未撤回其他消息")
+        bail!("原生消息账号或目标发生变化，未撤回其他消息")
     }
     let binding = c.binding()?;
     let current = crate::database::account_root(&c, &native::Process::bound(&binding)?)?;
@@ -169,14 +172,14 @@ pub fn recall(
         .as_ref()
         .is_none_or(|r| !crate::database::same_root(r, &current))
     {
-        bail!("微信账号已改变，未撤回音乐")
+        bail!("微信账号已改变，未撤回原生消息")
     }
     let result = rpc(
         &c,
         json!({"mode":"send","operation":"revoke","from":receipt.from,"to":receipt.to,"client_id":receipt.client_id,"local_id":receipt.local_id,"time":receipt.create_time,"server_id":receipt.server_id,"limit_seconds":limit as u64}),
     )?;
     if result["revoke_confirmed"] != true {
-        bail!("原生音乐撤回未确认，不重复执行")
+        bail!("原生消息撤回未确认，不重复执行")
     }
     let path = shared.data.join("native-music").join(format!(
         "{}.json",
@@ -189,7 +192,7 @@ pub fn recall(
     value["receipt"] = serde_json::to_value(saved)?;
     crate::config::atomic(&path, &value)?;
     shared.log(&format!(
-        "微信原生音乐撤回已由服务端确认：{}",
+        "微信原生消息撤回已由服务端确认：{}",
         receipt.server_id
     ));
     Ok(())

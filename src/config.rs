@@ -175,7 +175,7 @@ impl Config {
         self.host()
             .parse::<std::net::IpAddr>()
             .context("监听地址必须为 IP 地址")?;
-        if self.r()["port"].as_u64().unwrap_or(8765) > 65535
+        if !(1..=65535).contains(&self.r()["port"].as_u64().unwrap_or(0))
             || self.bot() == 0
             || self.bot() >= 1 << 53
         {

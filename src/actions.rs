@@ -186,11 +186,25 @@ pub fn recall_delay(raw: &Value, requested: f64) -> f64 {
 }
 pub fn nodes(value: &Value, shared: &Shared) -> Result<Vec<Node>> {
     let mut result = vec![];
+    let decoded;
+    let value = if let Some(text) = value.as_str() {
+        decoded = serde_json::from_str::<Value>(text).context("转发节点JSON无效")?;
+        &decoded
+    } else {
+        value
+    };
     let a = value.as_array().context("合并转发需要 node 数组")?;
     if a.is_empty() || a.len() > 100 || value.to_string().len() > 256 * 1024 {
         bail!("合并转发节点为空或内容超过限制");
     }
     for node in a {
+        let decoded;
+        let node = if let Some(text) = node.as_str() {
+            decoded = serde_json::from_str::<Value>(text).context("转发节点JSON无效")?;
+            &decoded
+        } else {
+            node
+        };
         if node["type"] != "node" {
             bail!("合并转发只接受 node 节点");
         }
@@ -212,6 +226,9 @@ pub fn nodes(value: &Value, shared: &Shared) -> Result<Vec<Node>> {
                 .sent
                 .get(&id)
                 .context("没有对应原消息，未替换为其他消息")?;
+            if record.messages.iter().any(|m| m.row.kind != 1) {
+                bail!("原消息包含非文字内容，不能仅取文字代替完整节点；请提供完整content");
+            }
             json!([{"type":"text","data":{"text":record.messages.iter().filter(|m|m.row.kind==1).map(|m|m.row.content.clone()).collect::<Vec<_>>().join("\n")}}])
         };
         result.push(Node { name, content });
@@ -246,6 +263,7 @@ pub fn forward_parts(nodes: &[Node], shared: &Shared) -> Result<Vec<Part>> {
                 .context("节点 content 必须是文字或消息段数组")?
                 .clone()
         };
+        let segments = crate::compat::segments(&json!(segments), false)?;
         let mut buffer = format!("{}\n", node.name);
         for segment in segments {
             // A merged-forward node cannot carry a quote/reply segment.
@@ -292,8 +310,8 @@ pub fn forward_parts(nodes: &[Node], shared: &Shared) -> Result<Vec<Part>> {
     if out.len() > 20 {
         bail!("原生合并转发需要超过20条中转消息，无法在OneBot请求期限内完成；未发送");
     }
-    if out.iter().any(|p| matches!(p, Part::Music(_))) {
-        bail!("原生音乐网络卡暂不支持合并转发节点，未发送中转消息")
+    if out.iter().any(crate::delivery::network) {
+        bail!("原生音乐和语音暂不支持合并转发节点，未发送中转消息")
     }
     Ok(out)
 }
@@ -842,8 +860,8 @@ impl Automation {
         before: u64,
         sent_at: f64,
     ) -> Result<Tracked> {
-        if matches!(part, Part::Music(_)) {
-            bail!("音乐应使用匹配的原生网络回执，不能伪造数据库确认")
+        if crate::delivery::network(part) {
+            bail!("原生媒体应使用匹配的网络回执，不能伪造数据库确认")
         }
         let row = shared
             .own
@@ -873,6 +891,7 @@ impl Automation {
                                                     .matches_cached(&native)
                                             })
                                 }
+                                Part::Voice(_) => false,
                             }
                     })
                     .map(|r| r.message.clone())
@@ -893,7 +912,7 @@ impl Automation {
                                 || node.CurrentName()?.to_string() == "[图片]"
                                 || node.CurrentName()?.to_string() == "图片"
                         }
-                        Part::Music(_) => false,
+                        Part::Music(_) | Part::Voice(_) => false,
                     };
                     if matches {
                         found = Some(node);
@@ -1012,7 +1031,6 @@ impl Automation {
                     text_area = area;
                 }
             }
-            let mut sum = 0u64;
             let mut count = 0u64;
             let mut green_max_x = 0i32;
             let mut green_min_x = i32::MAX;
@@ -1031,7 +1049,6 @@ impl Automation {
                         let p = picture.get_pixel(x as _, y as _);
                         let (r, g, b) = (p[0] as i32, p[1] as i32, p[2] as i32);
                         if g > r + 18 && g > b + 18 && g > 45 {
-                            sum += x as u64;
                             count += 1;
                             green_max_x = green_max_x.max(x as i32);
                             green_min_x = green_min_x.min(x as i32);

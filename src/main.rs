@@ -17,7 +17,7 @@ mod message_view;
 mod music;
 mod music_backend;
 mod music_ui;
-#[cfg(test)]
+#[allow(dead_code)]
 mod music_wire;
 mod native;
 mod outbox;
@@ -26,6 +26,11 @@ mod record_card;
 mod service;
 mod telemetry;
 mod ui_readiness;
+mod voice;
+// Shared codec: request validation is used by the embedded helper, response
+// validation by the host. Each binary intentionally uses a different subset.
+#[allow(dead_code)]
+mod voice_wire;
 
 fn main() {
     let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();

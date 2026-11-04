@@ -1,0 +1,52 @@
+{
+  "version": "4.2.0.12",
+  "sha256": "2b3677c3f932daaa4ef84c8b2acd0aee12cbe5a779ff9e740c370761e5c291ce",
+  "task_size": "0x198",
+  "task_vtable": "0x9bfc478",
+  "request_offset": "0xa8",
+  "response_offset": "0x140",
+  "cgi": 127,
+  "endpoint": "/cgi-bin/micromsg-bin/uploadvoice",
+  "functions": {
+    "uploadvoice_submit": {
+      "rva": "0x5d5b8f0",
+      "first_32_bytes": "554157415641545657534883ec70488d6c247048c745f8feffffff4c89cf4c89"
+    },
+    "task_ctor": {
+      "rva": "0x5d5bc30",
+      "first_32_bytes": "5541565657534883ec40488d6c244048c745f8feffffff4889d648c741080000"
+    },
+    "task_dtor": {
+      "rva": "0x5d5bef0",
+      "first_32_bytes": "56574883ec2889d74889ce488d057605ea034889014881c140010000e8ffcb27"
+    },
+    "serialize": {
+      "rva": "0x5d5be00",
+      "first_32_bytes": "555657534883ec48488d6c244048c74500feffffff4c89cf4889d64889cb488b"
+    },
+    "response": {
+      "rva": "0x2eb9dc0",
+      "first_32_bytes": "5657534883ec204889d64889cf4881c7400100004889d1e874f07efd89c34889"
+    },
+    "get_request": {
+      "rva": "0x115010",
+      "first_32_bytes": "488d81a8000000c3cccccccccccccccc488d81d8000000c3cccccccccccccccc"
+    },
+    "get_response": {
+      "rva": "0x1e7dd10",
+      "first_32_bytes": "488d8140010000c3cccccccccccccccc55564883ec48488d6c244048c74500fe"
+    },
+    "prepare_base_request": {
+      "rva": "0x5d5bf40",
+      "first_32_bytes": "5541565657534883ec60488d6c246048c745f8feffffff4889cec7020a000000"
+    },
+    "request_ctor": {
+      "rva": "0x2fd3390",
+      "first_32_bytes": "4889c8488d0d0ef46f0648890848c7809000000000000000488d0dc1e3d30848"
+    },
+    "response_ctor": {
+      "rva": "0x2fd3400",
+      "first_32_bytes": "4889c8488d0d2ef46f06488908488d0d5ce3d308488948084889481048c74018"
+    }
+  }
+}
