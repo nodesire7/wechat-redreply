@@ -91,7 +91,7 @@ fn valid_identity(from: &str, to: &str, client: &str) -> bool {
         && (16..=128).contains(&client.len())
         && client
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'@'))
 }
 fn buffer_data<'a>(encoded: &'a [u8]) -> Result<&'a [u8], String> {
     let f = parsed(encoded)?;
@@ -436,6 +436,26 @@ pub fn response_metadata(raw: &[u8]) -> serde_json::Value {
 mod tests {
     use super::*;
     const CLIENT: &str = "voice_SyntheticCaseId";
+    #[test]
+    fn group_voice_preserves_native_chatroom_target_and_client_identity() {
+        let mut u = VoiceUpload::new(
+            "wxid_self",
+            "12345@chatroom",
+            "12345@chatroom_1234_42",
+            1234,
+            1000,
+            &silk(10, 10),
+        )
+        .unwrap();
+        let body = u.next_fields().unwrap();
+        validate_request_fields(
+            &body,
+            "wxid_self",
+            "12345@chatroom",
+            "12345@chatroom_1234_42",
+        )
+        .unwrap();
+    }
     fn silk(packets: usize, size: usize) -> Vec<u8> {
         let mut b = b"\x02#!SILK_V3".to_vec();
         for _ in 0..packets {

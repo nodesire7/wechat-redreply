@@ -7,6 +7,7 @@ mod music_wire;
 mod profile;
 mod voice_task;
 #[path = "../../src/voice_wire.rs"]
+#[allow(dead_code)] // Shared module: this helper uses only request validation.
 mod voice_wire;
 use windows::{
     Win32::{Foundation::*, System::LibraryLoader::*, UI::WindowsAndMessaging::*},

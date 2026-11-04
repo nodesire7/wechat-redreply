@@ -5,6 +5,8 @@ use crate::{
     native,
 };
 use anyhow::{Result, bail};
+use std::path::PathBuf;
+use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Controls::EM_GETMODIFY;
 use windows::{
     Win32::{Foundation::*, System::Threading::*, UI::WindowsAndMessaging::*},
@@ -34,6 +36,91 @@ unsafe fn text(window: HWND, id: i32) -> Result<String> {
         Ok(String::from_utf16_lossy(
             &buffer[..written.min(buffer.len())],
         ))
+    }
+}
+/// Check the actual WebView footer before a maintenance close. Never infer
+/// saved state from config.json, because the user's draft lives in React.
+pub fn clean_web_settings(c: &Config, pid: u32, created: f64, close: bool) -> Result<bool> {
+    let executable = c
+        .path
+        .parent()
+        .unwrap()
+        .join("WechatRedReply.exe")
+        .canonicalize()?;
+    let process = native::Process::open(pid)?;
+    if (process.creation()? - created).abs() > 0.01
+        || PathBuf::from(process.image()?).canonicalize()? != executable
+    {
+        bail!("设置进程身份不匹配，未关闭");
+    }
+    let mut candidates = vec![];
+    unsafe {
+        for h in native::process_windows(pid) {
+            let mut name = [0u16; 128];
+            let n = GetWindowTextW(h, &mut name);
+            if String::from_utf16_lossy(&name[..n as usize]) == "微信 · 红色问答" {
+                let mut rect = RECT::default();
+                GetWindowRect(h, &mut rect)?;
+                if rect.right - rect.left > 400 && rect.bottom - rect.top > 300 {
+                    candidates.push(h)
+                }
+            }
+        }
+        if candidates.len() != 1 {
+            bail!("未找到唯一的设置主窗口，未关闭")
+        }
+        let window = candidates[0];
+        let foreground = GetForegroundWindow();
+        if foreground == window
+            || (!foreground.is_invalid() && GetAncestor(foreground, GA_ROOTOWNER) == window)
+        {
+            bail!("设置窗口正在前台使用，未关闭");
+        }
+        let automation = crate::delivery::Automation::new()?;
+        let root = automation.root(window)?;
+        let saved = automation
+            .find(&root, UIA_NamePropertyId, "配置已载入")
+            .map_err(|_| anyhow::anyhow!("设置窗口有未保存内容、正在执行操作或尚未就绪，未关闭"))?;
+        // Some WebView2 builds do not expose the footer's ARIA landmark. In
+        // that case verify the saved label belongs to the shallow, full-width
+        // bottom footer. A log line/table cell with the same text is not enough.
+        let mut outer = RECT::default();
+        GetWindowRect(window, &mut outer)?;
+        let walker = automation.automation.RawViewWalker()?;
+        let mut parent = Some(saved.clone());
+        let mut footer_verified = false;
+        for _ in 0..7 {
+            let Some(node) = parent else { break };
+            let r = node.CurrentBoundingRectangle()?;
+            let w = outer.right - outer.left;
+            let height = outer.bottom - outer.top;
+            if r.right - r.left > w / 2
+                && r.bottom - r.top < height / 4
+                && r.top > outer.top + height * 3 / 4
+                && r.bottom <= outer.bottom + 2
+            {
+                footer_verified = true;
+                break;
+            }
+            parent = walker.GetParentElement(&node).ok();
+        }
+        if !footer_verified {
+            bail!("无法核对配置已载入提示是否属于设置页脚，未关闭")
+        }
+        let button = automation.find(&root, UIA_NamePropertyId, "关闭设置窗口")?;
+        if !button.CurrentIsEnabled()?.as_bool() {
+            bail!("设置窗口正在执行操作，未关闭")
+        }
+        if close {
+            let state = config::load(&c.path.parent().unwrap().join("data/state.json"))?;
+            if state["running"] == true {
+                bail!("请先停止监听以更新程序")
+            }
+            // The inactive footer was just verified. Directed WM_CLOSE neither
+            // activates the window nor synthesizes mouse/keyboard input.
+            PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0))?;
+        }
+        Ok(true)
     }
 }
 pub fn close_clean_settings(c: &Config) -> Result<bool> {

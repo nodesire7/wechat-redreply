@@ -382,10 +382,8 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
                 .raw
                 .get("native_test_message")
                 .context("Missing native_test_message")?;
-            (
-                crate::actions::Operation::Send,
-                crate::delivery::prepare(message, false, &shared)?,
-            )
+            let parts = crate::delivery::prepare(message, false, &shared)?;
+            (crate::actions::Operation::Send, parts)
         } else {
             (
                 crate::actions::Operation::Send,
@@ -411,14 +409,17 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
         automation.send(&shared, &job)?;
         input_phases.push(snapshot("after_send"));
         let sent = started.elapsed().as_secs_f64();
-        let h = native::validate_window(&config.binding()?)?;
-        // A diagnostic screenshot must not prevent cleanup of a confirmed
-        // test message on a remote desktop with unavailable composition.
-        let _ = native::capture(h).and_then(|image| {
-            image.save(shared.data.join(format!("native-test-{mode}.png")))?;
-            Ok(())
-        });
-        input_phases.push(snapshot("after_capture"));
+        // Opt-in only: a diagnostic PrintWindow can wake remote composition.
+        // Delivery tests must measure the real operation without that extra UI
+        // work. A requested capture still cannot prevent test-message cleanup.
+        if std::env::args().any(|a| a == "--capture-test-artifacts") {
+            let h = native::validate_window(&config.binding()?)?;
+            let _ = native::capture(h).and_then(|image| {
+                image.save(shared.data.join(format!("native-test-{mode}.png")))?;
+                Ok(())
+            });
+            input_phases.push(snapshot("after_capture"));
+        }
         if mode == "voice-and-recall" {
             let hold = config.raw["native_test_hold_seconds"]
                 .as_u64()
@@ -696,10 +697,32 @@ pub fn entry() -> Result<()> {
         return crate::maintenance::capture_settings(&config, std::path::Path::new(&path));
     }
     if args.iter().any(|s| s == "--close-clean-settings") {
+        if let (Some(pid), Some(created)) = (option("--gui-pid"), option("--gui-created-at")) {
+            let closed = crate::maintenance::clean_web_settings(
+                &config,
+                pid.parse()?,
+                created.parse()?,
+                true,
+            )?;
+            println!("{}", json!({"closed":closed}));
+            return Ok(());
+        }
         println!(
             "{}",
             serde_json::json!({"closed":crate::maintenance::close_clean_settings(&config)?})
         );
+        return Ok(());
+    }
+    if args.iter().any(|s| s == "--probe-clean-settings") {
+        let clean = crate::maintenance::clean_web_settings(
+            &config,
+            option("--gui-pid").context("缺少设置PID")?.parse()?,
+            option("--gui-created-at")
+                .context("缺少设置进程时间")?
+                .parse()?,
+            false,
+        )?;
+        println!("{}", json!({"clean":clean}));
         return Ok(());
     }
     if args.iter().any(|s| s == "--picker-probe") {

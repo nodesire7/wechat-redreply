@@ -724,6 +724,13 @@ impl Automation {
         let h = native::validate_window(&binding)?;
         native::offscreen(h)?;
         let _operation_guard = crate::popup::Guard::install(h, &shared.data)?;
+        if !unsafe { windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled(h) }.as_bool() {
+            let diagnostic = crate::diagnostics::collect(&c);
+            let _ = config::atomic(&shared.data.join("ui-readiness.json"), &diagnostic);
+            return Err(crate::ui_readiness::not_submitted(
+                "微信主窗口被对话框阻塞，尚未发送；请检查微信提示（例如存储空间不足），处理后重试。控件诊断已保存到 data/ui-readiness.json",
+            ));
+        }
         let root = self.root(h)?;
         if self
             .find(&root, UIA_AutomationIdPropertyId, "chat_input_field")
@@ -795,9 +802,9 @@ impl Automation {
         if let Err(error) = prepared {
             let diagnostic = crate::diagnostics::collect(&c);
             let _ = config::atomic(&shared.data.join("ui-readiness.json"), &diagnostic);
-            bail!(
+            return Err(crate::ui_readiness::not_submitted(format!(
                 "微信目标界面未就绪，未发送：{error:#}。诊断已保存到 data/ui-readiness.json；请双击 diagnose.cmd 核对窗口状态和客户端版本"
-            );
+            )));
         }
         for (index, part) in job.parts.iter().enumerate() {
             if Instant::now() >= job.deadline

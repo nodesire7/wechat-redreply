@@ -328,11 +328,29 @@ pub fn save(shared: &Shared) -> Result<()> {
 pub fn ensure_recall(shared: &Shared, id: u64) -> Result<Record> {
     let c = shared.config.read().unwrap();
     let b = c.binding()?;
-    let ledger = shared.ledger.lock().unwrap();
-    let record = ledger
+    let mut ledger = shared.ledger.lock().unwrap();
+    let mut record = ledger
         .sent
         .get(&id)
-        .context("无法定位该消息；仅撤回本适配器已确认发送的消息")?;
+        .context("无法定位该消息；仅撤回本适配器已确认发送的消息")?
+        .clone();
+    let mut changed = false;
+    for part in &mut record.messages {
+        if let Some(receipt) = part.native_cgi.as_mut() {
+            if !receipt.recalled && crate::music_backend::recall_was_confirmed(shared, receipt)? {
+                receipt.recalled = true;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        record.recalled = record.messages.iter().all(Tracked::was_recalled);
+        ledger.sent.insert(id, record.clone());
+    }
+    drop(ledger);
+    if changed {
+        save(shared)?;
+    }
     if record.recalled {
         return Ok(record.clone());
     }
@@ -415,11 +433,11 @@ impl Automation {
             // above the input overlay; opening multi-select from it is stable.
             std::thread::sleep(Duration::from_millis(450));
             let first_row = self.locate_message(shared, h, &staging.name, &first.row.key())?;
-            self.context(h, &first_row)?;
+            let context_hit = self.context_with(h, &first_row, first.row.kind == 3, true, 120)?;
             let multi = match self.named_action(h, "多选") {
                 Ok(node) => node,
                 Err(error) => {
-                    self.dump_action_menu(shared, h, job.id, "多选");
+                    self.dump_action_menu(shared, h, job.id, "多选", &context_hit);
                     return Err(error);
                 }
             };
@@ -948,9 +966,6 @@ impl Automation {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
-    pub(crate) fn context(&self, h: HWND, row: &IUIAutomationElement) -> Result<()> {
-        self.context_with(h, row, true, false, -18)
-    }
     pub(crate) fn context_with(
         &self,
         h: HWND,
@@ -958,7 +973,7 @@ impl Automation {
         image_ok: bool,
         text_hints: bool,
         fallback_dx: i32,
-    ) -> Result<()> {
+    ) -> Result<Value> {
         // Context menus are only opened reliably while the bound window is in
         // the verified off-screen position; a visible/background Qt window can
         // silently drop the posted right-click.
@@ -1105,10 +1120,12 @@ impl Automation {
                 std::thread::sleep(Duration::from_millis(25));
             }
             std::thread::sleep(Duration::from_millis(120));
-            Ok(())
+            Ok(
+                json!({"client_point":[x,y],"row":[rect.left,rect.top,rect.right,rect.bottom],"list":[list.left,list.top,list.right,list.bottom],"capture_size":[picture.width(),picture.height()],"image":image.is_some(),"text_rect":text_node.is_some(),"ink_pixels":dark_count,"green_pixels":count,"fallback_inset":fallback_dx}),
+            )
         }
     }
-    fn dump_action_menu(&self, shared: &Shared, h: HWND, id: u64, wanted: &str) {
+    fn dump_action_menu(&self, shared: &Shared, h: HWND, id: u64, wanted: &str, hit: &Value) {
         let mut windows = vec![];
         for (index, popup) in crate::native::thread_windows(h).into_iter().enumerate() {
             let Ok(root) = self.root(popup) else { continue };
@@ -1157,7 +1174,7 @@ impl Automation {
             .unwrap_or_default();
         let _ = crate::config::atomic(
             &shared.data.join(format!("forward-menu-{id}.json")),
-            &json!({"wanted":wanted,"windows":windows,"list":list,"visible":visible}),
+            &json!({"wanted":wanted,"hit":hit,"windows":windows,"list":list,"visible":visible}),
         );
     }
     fn recall_item_any(&self, h: HWND) -> Result<IUIAutomationElement> {
@@ -1348,7 +1365,7 @@ impl Automation {
         }
     }
     pub(crate) fn recall(&self, shared: &Shared, id: u64) -> Result<()> {
-        let record = ensure_recall(shared, id)?;
+        let mut record = ensure_recall(shared, id)?;
         if record.recalled {
             return Ok(());
         }
@@ -1366,6 +1383,48 @@ impl Automation {
         {
             bail!("微信账号已改变，未执行撤回")
         }
+        // The checked CGI594 endpoint revokes any own message by its verified
+        // server ID. It avoids context menus, stale viewports and 15s UI waits
+        // consuming the remaining window of another part of the same output.
+        if crate::music_backend::inspect(&c).is_ok() {
+            let from = shared
+                .staging
+                .read()
+                .unwrap()
+                .as_ref()
+                .context("本账号身份尚未核验")?
+                .wxid
+                .clone();
+            let to = shared
+                .peers
+                .read()
+                .unwrap()
+                .iter()
+                .find(|p| p.name == record.name && p.group == record.group)
+                .context("撤回目标身份尚未核验")?
+                .wxid
+                .clone();
+            let mut changed = false;
+            for part in &mut record.messages {
+                if part.native_cgi.is_none() && !part.was_recalled() {
+                    part.native_cgi = Some(crate::music_backend::database_recall_receipt(
+                        &from, &to, &part.row,
+                    )?);
+                    changed = true;
+                }
+            }
+            if changed {
+                shared
+                    .ledger
+                    .lock()
+                    .unwrap()
+                    .sent
+                    .get_mut(&id)
+                    .context("撤回回执已不存在")?
+                    .messages = record.messages.clone();
+                save(shared)?;
+            }
+        }
         let h = crate::native::validate_window(&c.binding()?)?;
         let has_ui = record.messages.iter().any(|m| m.native_cgi.is_none());
         let _guard = if has_ui {
@@ -1381,9 +1440,15 @@ impl Automation {
         // Revoke media before text. After the first revoke, WeChat inserts a
         // system notice and may move the viewport; the image menu is the same
         // message menu, but its row is easier to lose than a text bubble.
-        ordered.sort_by_key(|m| m.row.kind == 1);
+        if has_ui {
+            ordered.sort_by_key(|m| m.row.kind == 1);
+        } else {
+            ordered.sort_by(|a, b| a.sent_at.total_cmp(&b.sent_at));
+        }
         // Let the freshly forwarded card finish painting before right-clicking.
-        std::thread::sleep(std::time::Duration::from_millis(600));
+        if has_ui {
+            std::thread::sleep(std::time::Duration::from_millis(600));
+        }
         for tracked in ordered {
             if tracked.was_recalled() {
                 continue;

@@ -452,6 +452,30 @@ pub fn restore_chat(binding: &Binding, data: &std::path::Path) -> Result<()> {
         Ok(())
     }
 }
+fn offscreen_size(width: i32, height: i32, already_offscreen: bool) -> Result<(i32, i32)> {
+    if width < 600 || height < 400 {
+        // An already-bound main window can collapse to a conversation-list
+        // layout after desktop/session geometry changes. Recover that layout
+        // only outside every monitor; never resize a user's visible window or
+        // promote a tiny dialog/login surface into a working chat by size.
+        if already_offscreen && width >= 360 && height >= 400 {
+            return Ok((width.max(960), height.max(740)));
+        }
+        bail!("微信窗口尺寸不足；请先绑定完整聊天窗口");
+    }
+    Ok((width, height))
+}
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+    #[test]
+    fn compact_bound_window_recovers_only_while_already_offscreen() {
+        assert_eq!(offscreen_size(440, 755, true).unwrap(), (960, 755));
+        assert!(offscreen_size(440, 755, false).is_err());
+        assert!(offscreen_size(300, 250, true).is_err());
+        assert_eq!(offscreen_size(960, 755, true).unwrap(), (960, 755));
+    }
+}
 pub fn offscreen(h: HWND) -> Result<()> {
     unsafe {
         if !IsWindowVisible(h).as_bool() {
@@ -481,11 +505,20 @@ pub fn offscreen(h: HWND) -> Result<()> {
         GetWindowRect(h, &mut r)?;
         let w = r.right - r.left;
         let height = r.bottom - r.top;
-        if w < 600 || height < 400 {
-            bail!("当前不是已登录的完整微信聊天窗口");
-        }
         let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
         let top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        let (wanted_w, wanted_h) = offscreen_size(w, height, r.right < left && r.bottom < top)?;
+        if wanted_w != w || wanted_h != height {
+            SetWindowPos(
+                h,
+                None,
+                0,
+                0,
+                wanted_w,
+                wanted_h,
+                SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
+            )?;
+        }
         if r.right >= left || r.bottom >= top {
             SetWindowPos(
                 h,

@@ -689,19 +689,36 @@ pub(crate) fn process_one_with(
         .err()
         .map(ToString::to_string)
         .unwrap_or_default();
-    finish(
-        shared,
-        e.id,
-        if result.is_ok() { "sent" } else { "uncertain" },
-        &error,
-    )?;
+    let delivery_status = if result.is_ok() {
+        "sent"
+    } else if result
+        .as_ref()
+        .is_err_and(|e| e.is::<crate::ui_readiness::NotSubmitted>())
+        && !shared
+            .ledger
+            .lock()
+            .unwrap()
+            .sent
+            .get(&e.id)
+            .is_some_and(|record| !record.messages.is_empty())
+    {
+        "failed"
+    } else {
+        "uncertain"
+    };
+    finish(shared, e.id, delivery_status, &error)?;
     shared.event("delivery",&json!({"session":e.name,"group":e.group,"message_id":e.id,"batch_id":e.batch,"success":result.is_ok(),"error":error,"confirmation":crate::delivery::confirmation(&job.parts),"elapsed_ms":start.elapsed().as_millis()}));
     shared
         .last_send_us
         .store(start.elapsed().as_micros() as u64, Ordering::Relaxed);
     if result.is_err() {
         shared.log(&format!(
-            "持久化任务发送未确认：ID={}，{error}；未自动重发",
+            "持久化任务{}：ID={}，{error}；未自动重发",
+            if delivery_status == "failed" {
+                "未发送"
+            } else {
+                "发送未确认"
+            },
             e.id
         ));
     }
@@ -1040,6 +1057,52 @@ mod tests {
         );
         crate::actions::save(s).unwrap();
         finish(s, id, "sent", "").unwrap();
+    }
+    #[test]
+    fn preflight_rejection_is_failed_while_an_unknown_submission_stays_uncertain() {
+        let d = tempfile::tempdir().unwrap();
+        let (c, s) = setup(d.path());
+        let first = send(&s, &c, "甲", "blocked")["message_id"]
+            .as_u64()
+            .unwrap();
+        assert!(
+            process_one_with(&s, |_| {
+                Err(crate::ui_readiness::not_submitted(
+                    "微信主窗口被提示阻塞，未发送",
+                ))
+            })
+            .unwrap()
+        );
+        assert_eq!(
+            status(&s, first).unwrap().unwrap()["delivery_status"],
+            "failed"
+        );
+        let second = send(&s, &c, "甲", "unknown")["message_id"]
+            .as_u64()
+            .unwrap();
+        assert!(process_one_with(&s, |_| anyhow::bail!("submission timed out")).unwrap());
+        assert_eq!(
+            status(&s, second).unwrap().unwrap()["delivery_status"],
+            "uncertain"
+        );
+        let partial = send(&s, &c, "甲", "partial")["message_id"]
+            .as_u64()
+            .unwrap();
+        assert!(
+            process_one_with(&s, |job| {
+                track(&s, &c, job.id, config::now(), 1);
+                Err(crate::ui_readiness::not_submitted("later part blocked"))
+            })
+            .unwrap()
+        );
+        assert_eq!(
+            status(&s, partial).unwrap().unwrap()["delivery_status"],
+            "uncertain"
+        );
+        assert!(
+            claim(&s).unwrap().is_none(),
+            "no failure is blindly retried"
+        );
     }
     #[test]
     fn withdrawal_notices_schedule_early_recall() {

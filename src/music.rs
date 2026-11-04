@@ -90,7 +90,7 @@ pub fn native_appmsg(card: &MusicCard, app_id: &str) -> Result<String> {
 pub fn native_appmsg_with_mode(
     card: &MusicCard,
     app_id: &str,
-    link_mode: PlaybackLink,
+    _link_mode: PlaybackLink,
 ) -> Result<String> {
     if card.provider != Provider::Qq
         || app_id.len() != 18
@@ -105,13 +105,10 @@ pub fn native_appmsg_with_mode(
         .context("音乐请求缺少真实播放地址")?;
     let audio = playback_url(audio)?;
     use quick_xml::escape::escape;
-    // The provider's landing page may demand a receiver-side subscription even
-    // when RedLang supplied playable audio. Never re-resolve by catalog ID or
-    // replace this request's signed audio with a provider preview.
-    let page = match link_mode {
-        PlaybackLink::Audio => audio.as_str(),
-        PlaybackLink::Source => card.page_url.as_str(),
-    };
+    // QQ's native card has separate page and stream fields. Replacing its page
+    // with an MP3 URL broke recipient playback despite a valid direct stream.
+    // Keep the supplied song identity page and the caller's actual audio.
+    let page = card.page_url.as_str();
     let mut out = format!("<appmsg appid=\"{app_id}\" sdkver=\"0\">");
     for (name, text) in [
         ("title", card.title.as_str()),
@@ -119,15 +116,27 @@ pub fn native_appmsg_with_mode(
         ("action", "view"),
         ("type", "3"),
         ("showtype", "0"),
+        ("content", ""),
         ("url", page),
         ("dataurl", audio.as_str()),
+        ("lowurl", ""),
+        ("lowdataurl", ""),
         ("thumburl", card.image_url.as_deref().unwrap_or("")),
         ("songalbumurl", card.image_url.as_deref().unwrap_or("")),
     ] {
         out.push_str(&format!("<{name}>{}</{name}>", escape(text)));
     }
+    // The observed provider format prefixes the current explicit QQ songmid;
+    // numeric song IDs and ambiguous pages do not establish that identity.
+    if let Some(TrackKey::QqSongMid(mid)) = card.track_key()
+        && mid.len() == 14
+        && mid.bytes().all(|b| b.is_ascii_alphanumeric())
+    {
+        out.push_str(&format!(
+            "<musicShareItem><mid>getlinkclisdkmid_{mid}</mid></musicShareItem>"
+        ));
+    }
     out.push_str("<appattach/><extinfo/></appmsg>");
-    out.push_str("<appinfo><version>54</version><appname>QQ音乐</appname></appinfo>");
     Ok(out)
 }
 
@@ -140,15 +149,8 @@ pub fn playback_url(audio: &str) -> Result<String> {
     {
         bail!("音乐播放地址须为无用户凭据的HTTP(S)地址");
     }
-    // Only the observed QQ CDN supports this exact upgrade. Preserve all
-    // signed query bytes; arbitrary providers may have scheme-bound signatures.
-    if parsed.scheme() == "http"
-        && parsed.host_str().is_some_and(|h| {
-            h == "dl.stream.qqmusic.qq.com" || h.ends_with(".stream.qqmusic.qq.com")
-        })
-    {
-        return Ok(format!("https://{}", &audio[7..]));
-    }
+    // A successful desktop HTTP probe is not evidence that WeChat's embedded
+    // player accepts a substituted scheme. Preserve the supplied URL exactly.
     Ok(audio.to_owned())
 }
 
@@ -684,7 +686,47 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn music_card_uses_supplied_audio_for_play_and_tap_without_a_vip_landing_page() {
+    fn native_music_getlink_mid_uses_current_qq_songmid() {
+        for page in [
+            "https://y.qq.com/n/ryqq/songDetail/AbC123dEf456Gh",
+            "https://i.y.qq.com/v8/playsong.html?songmid=AbC123dEf456Gh",
+        ] {
+            let mut card = qq(page);
+            card.audio_url = Some("http://audio.example/Current.mp3?sig=Case&x=1".into());
+            let xml = native_appmsg(&card, "wx0123456789abcdef").unwrap();
+            assert!(xml.contains(
+                "<musicShareItem><mid>getlinkclisdkmid_AbC123dEf456Gh</mid></musicShareItem>"
+            ));
+        }
+    }
+
+    #[test]
+    fn native_music_getlink_mid_does_not_invent_song_identity() {
+        for page in [
+            "https://i.y.qq.com/v8/playsong.html?songid=12345678901234",
+            "https://i.y.qq.com/v8/playsong.html?songmid=AbC123dEf456Gh&songmid=ZyX987wVu654Ts",
+            "https://y.qq.com/n/ryqq/songDetail/AbC123dEf456G",
+            "https://y.qq.com/n/ryqq/songDetail/AbC123dEf456Gh9",
+            "https://y.qq.com/n/ryqq/songDetail/AbC123dEf456G_",
+            "https://y.qq.com/n/ryqq/songDetail/AbC123dEf456Gé",
+        ] {
+            let mut card = qq(page);
+            card.audio_url = Some("http://audio.example/Current.mp3?sig=Case&x=1".into());
+            let xml = native_appmsg(&card, "wx0123456789abcdef").unwrap();
+            assert!(!xml.contains("<musicShareItem>"));
+        }
+    }
+
+    #[test]
+    fn native_song_page_is_not_replaced_by_the_audio_stream() {
+        let mut card = qq("https://y.qq.com/n/ryqq/songDetail/ThisSong");
+        card.audio_url = Some("https://audio.example/Track.mp3?sig=Case&x=1".into());
+        let xml = native_appmsg(&card, "wx0123456789abcdef").unwrap();
+        assert!(xml.contains("<url>https://y.qq.com/n/ryqq/songDetail/ThisSong</url>"));
+    }
+
+    #[test]
+    fn music_card_keeps_native_page_and_supplied_audio_as_distinct_fields() {
         let card = MusicCard::new(
             Provider::Qq,
             "本次曲目".into(),
@@ -695,11 +737,9 @@ mod tests {
         )
         .unwrap();
         let xml = native_appmsg(&card, "wx0123456789abcdef").unwrap();
+        assert!(xml.contains("<url>https://y.qq.com/n/ryqq/songDetail/ThisSong</url>"));
         assert!(xml.contains(
-            "<url>https://dl.stream.qqmusic.qq.com/This.mp3?vkey=KeepCase&amp;src=1</url>"
-        ));
-        assert!(xml.contains(
-            "<dataurl>https://dl.stream.qqmusic.qq.com/This.mp3?vkey=KeepCase&amp;src=1</dataurl>"
+            "<dataurl>http://dl.stream.qqmusic.qq.com/This.mp3?vkey=KeepCase&amp;src=1</dataurl>"
         ));
         assert!(!xml.contains("playsong.html"));
         let source =
@@ -735,7 +775,7 @@ mod tests {
         assert_eq!(parsed.artist, card.artist);
         assert_eq!(parsed.audio_url, card.audio_url);
         assert_eq!(parsed.image_url, card.image_url);
-        assert_eq!(parsed.page_url, card.audio_url.as_deref().unwrap());
+        assert_eq!(parsed.page_url, card.page_url);
         assert!(!app.contains("STAY"));
         assert!(!app.contains("cdnthumbaeskey"));
         assert_eq!(
