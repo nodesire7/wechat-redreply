@@ -295,6 +295,29 @@ fn api_until(
     let action = request["action"].as_str().unwrap_or("");
     let result = (|| -> Result<Value> {
         match action {
+            "inject_message" => {
+                let text = params["text"].as_str().context("Missing text")?.to_owned();
+                let name = params["name"].as_str().unwrap_or("阿飞").to_owned();
+                let uid = params["user_id"].as_u64().unwrap_or(197589500722561);
+                let id = (config::now() * 1000.) as u64;
+                let peer = crate::database::Peer {
+                    name: name.clone(),
+                    group: false,
+                    wxid: String::new(),
+                };
+                let row = crate::database::Message {
+                    local_id: 0,
+                    server_id: id as i64,
+                    sort_seq: 0,
+                    create_time: config::now() as i64,
+                    kind: 1,
+                    sender: name.clone(),
+                    content: text,
+                    shard: "inject".into(),
+                };
+                let published = shared.publish(&peer, &name, uid, &row, id);
+                Ok(json!({"published":published,"message_id":id}))
+            }
             "get_version_info" => Ok(
                 json!({"app_name":"wechat-redreply-rust","app_version":env!("CARGO_PKG_VERSION"),"protocol_version":"v11"}),
             ),
@@ -400,7 +423,7 @@ fn api_until(
                     .context("Forward message is unavailable")?;
                 Ok(json!({"message":nodes,"messages":nodes}))
             }
-            "send_private_forward_msg" | "send_group_forward_msg" => {
+            "send_private_forward_msg" | "send_group_forward_msg" | "send_forward_msg" => {
                 if crate::outbox::enabled(&c) {
                     if !shared.owner(owner) {
                         bail!("Connection closed");
@@ -410,7 +433,8 @@ fn api_until(
                 if !shared.ready.load(Ordering::SeqCst) || !shared.owner(owner) {
                     bail!("Wechat backend is not ready");
                 }
-                let group = action == "send_group_forward_msg" && numeric(&params["group_id"]) > 0;
+                let group = (action == "send_group_forward_msg" || action == "send_forward_msg")
+                    && (numeric(&params["group_id"]) > 0 || params["message_type"] == "group");
                 let uid = numeric(&params[if group { "group_id" } else { "user_id" }]);
                 let (name, _) = c
                     .scope()

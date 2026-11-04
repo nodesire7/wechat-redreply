@@ -76,7 +76,40 @@ pub fn native_appmsg(card: &MusicCard, app_id: &str) -> Result<String> {
         .audio_url
         .as_deref()
         .context("音乐请求缺少真实播放地址")?;
+    // WeChat refuses cleartext media URLs in cards.  QQ Music's CDN serves
+    // the same object over HTTPS, so normalize before writing the XML.
+    let audio = if let Some(rest) = audio.strip_prefix("http://") {
+        format!("https://{rest}")
+    } else {
+        audio.to_owned()
+    };
     use quick_xml::escape::escape;
+    // Match the card shape WeChat itself produces for QQ Music: the play page
+    // uses i.y.qq.com with the WeChat share parameters, and <appinfo> is a
+    // sibling of <appmsg> inside <msg>, not a child of <appmsg>.
+    let page = if card.provider == Provider::Qq {
+        if let Ok(parsed) = url::Url::parse(&card.page_url) {
+            let songmid = parsed
+                .query_pairs()
+                .find(|(key, _)| key == "songmid")
+                .map(|(_, value)| value.into_owned())
+                .or_else(|| {
+                    parsed
+                        .path_segments()
+                        .and_then(|mut parts| parts.next_back().map(str::to_owned))
+                });
+            match songmid {
+                Some(songmid) => format!(
+                    "https://i.y.qq.com/v8/playsong.html?platform=11&appshare=android_qq&songmid={songmid}&type=0&appsongtype=1&_wv=1&source=weixin"
+                ),
+                None => card.page_url.clone(),
+            }
+        } else {
+            card.page_url.clone()
+        }
+    } else {
+        card.page_url.clone()
+    };
     let mut out = format!("<appmsg appid=\"{app_id}\" sdkver=\"0\">");
     for (name, text) in [
         ("title", card.title.as_str()),
@@ -84,19 +117,15 @@ pub fn native_appmsg(card: &MusicCard, app_id: &str) -> Result<String> {
         ("action", "view"),
         ("type", "3"),
         ("showtype", "0"),
-        ("content", ""),
-        ("url", card.page_url.as_str()),
-        ("dataurl", audio),
-        ("lowurl", ""),
-        ("lowdataurl", ""),
+        ("url", page.as_str()),
+        ("dataurl", audio.as_str()),
         ("thumburl", card.image_url.as_deref().unwrap_or("")),
         ("songalbumurl", card.image_url.as_deref().unwrap_or("")),
     ] {
         out.push_str(&format!("<{name}>{}</{name}>", escape(text)));
     }
-    // The real QQ Music card carries <appinfo> as a sibling of <appmsg>.
-    // Without the registered display name WeChat renders "未注册的应用".
-    out.push_str("<appinfo><version>54</version><appname>QQ音乐</appname></appinfo><appattach/><extinfo/></appmsg>");
+    out.push_str("<appattach/><extinfo/></appmsg>");
+    out.push_str("<appinfo><version>54</version><appname>QQ音乐</appname></appinfo>");
     Ok(out)
 }
 

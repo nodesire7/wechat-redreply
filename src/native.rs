@@ -365,6 +365,28 @@ pub fn thread_windows(h: HWND) -> Vec<HWND> {
     }
     s.found
 }
+pub fn process_windows(pid: u32) -> Vec<HWND> {
+    struct Search {
+        pid: u32,
+        found: Vec<HWND>,
+    }
+    unsafe extern "system" fn cb(h: HWND, p: LPARAM) -> BOOL {
+        unsafe {
+            let s = &mut *(p.0 as *mut Search);
+            let mut owner = 0u32;
+            GetWindowThreadProcessId(h, Some(&mut owner));
+            if owner == s.pid && IsWindowVisible(h).as_bool() {
+                s.found.push(h);
+            }
+        }
+        BOOL(1)
+    }
+    let mut s = Search { pid, found: vec![] };
+    unsafe {
+        let _ = EnumWindows(Some(cb), LPARAM(&mut s as *mut _ as isize));
+    }
+    s.found
+}
 pub fn validate_window(binding: &Binding) -> Result<HWND> {
     let _ = Process::bound(binding)?;
     let h = hwnd(binding);

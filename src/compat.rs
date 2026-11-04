@@ -1,29 +1,32 @@
-//! Compatibility listener for the unmodified RedReply/RedLang packages.
+//! Generic OneBot compatibility for the RedReply bridge.
 //!
-//! The original movie package emits the resource list as a plain `send_*_msg`
-//! text and only uses `send_group_forward_msg` on Telegram.  This layer keeps
-//! the package untouched and promotes that long list to a native merged-forward
-//! card, attaching the cover image that was sent just before it.
+//! These rules are package-agnostic: any package that emits CQ codes inside a
+//! text segment, or a `node` object inside a normal send, gets the standard
+//! OneBot semantics instead of a movie-specific special case.
 use crate::service::Shared;
 use serde_json::{Value, json};
 
 fn segments(message: &Value) -> Vec<Value> {
-    match message {
+    let raw = match message {
         Value::String(text) => crate::delivery::parse_cq(text),
         Value::Array(items) => items.clone(),
         _ => vec![],
+    };
+    let mut out = Vec::with_capacity(raw.len());
+    for segment in raw {
+        let text = (segment["type"] == "text")
+            .then(|| segment["data"]["text"].as_str())
+            .flatten();
+        if let Some(text) = text.filter(|text| text.contains("[CQ:")) {
+            out.extend(crate::delivery::parse_cq(text));
+        } else {
+            out.push(segment);
+        }
     }
+    out
 }
 
-fn target_key(group: bool, p: &Value) -> String {
-    if group {
-        format!("g{}", p["group_id"])
-    } else {
-        format!("u{}", p["user_id"])
-    }
-}
-
-pub fn rewrite(shared: &Shared, request: &mut Value) {
+pub fn rewrite(_shared: &Shared, request: &mut Value) {
     let Some(action) = request["action"].as_str() else {
         return;
     };
@@ -33,77 +36,32 @@ pub fn rewrite(shared: &Shared, request: &mut Value) {
     let params = request["params"].clone();
     let group =
         action == "send_group_msg" || (action == "send_msg" && params["message_type"] == "group");
-    let key = target_key(group, &params);
-    let now = crate::config::now();
     let items = segments(&params["message"]);
 
-    // Remember the most recent cover image for this target.
-    if let Some(image) = items.iter().find(|s| s["type"] == "image").cloned() {
-        if let Ok(mut cover) = shared.cover.lock() {
-            *cover = Some((key.clone(), now, image));
-        }
-    }
-
-    let text = items
+    // A node object delivered through a normal send is a merged-forward
+    // payload. Promote it to the standard forward action for this target.
+    let nodes: Vec<Value> = items
         .iter()
-        .filter(|s| s["type"] == "text")
-        .filter_map(|s| s["data"]["text"].as_str())
-        .collect::<String>();
-    if !(text.contains("资源列表") && text.contains("magnet:")) {
+        .filter(|s| s["type"] == "node")
+        .cloned()
+        .collect();
+    if nodes.is_empty() {
         return;
     }
-
-    let cover = if items.iter().any(|s| s["type"] == "image") {
-        None
-    } else {
-        shared
-            .cover
-            .lock()
-            .ok()
-            .and_then(|mut buffer| match buffer.as_ref() {
-                Some((stored, at, image)) if stored == &key && now - *at < 90. => {
-                    let image = image.clone();
-                    *buffer = None;
-                    Some(image)
-                }
-                _ => None,
-            })
-    };
-
-    let mut content = vec![];
-    if let Some(image) = cover {
-        content.push(image);
-    }
-    for segment in items {
-        if segment["type"] == "reply" {
-            continue;
-        }
-        content.push(segment);
-    }
-    if content.is_empty() {
-        return;
-    }
-    let node = json!({
-        "type":"node",
-        "data":{
-            "name":"电影资源",
-            "uin":"0",
-            "content":content
-        }
-    });
-    let (action, mut params) = if group {
+    let batch = params.get("wechat_batch_id").cloned();
+    let (action, mut out) = if group {
         (
             "send_group_forward_msg",
-            json!({"group_id":request["params"]["group_id"].clone(),"messages":[node]}),
+            json!({"group_id":params["group_id"].clone(),"messages":nodes}),
         )
     } else {
         (
             "send_private_forward_msg",
-            json!({"user_id":request["params"]["user_id"].clone(),"messages":[node]}),
+            json!({"user_id":params["user_id"].clone(),"messages":nodes}),
         )
     };
-    if let Some(batch) = request["params"].get("wechat_batch_id") {
-        params["wechat_batch_id"] = batch.clone();
+    if let Some(batch) = batch {
+        out["wechat_batch_id"] = batch;
     }
-    *request = json!({"action":action,"params":params});
+    *request = json!({"action":action,"params":out});
 }

@@ -13,6 +13,7 @@
       <img class="brand-avatar" src="/avatar.png" alt="">
       <span>微信 · 红色问答</span>
     </div>
+    <a class="new-gui" id="new-gui" href="/next">新版界面</a>
     <div class="window-controls">
       <button class="wc" data-window="minimize" aria-label="最小化"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button>
       <button class="wc" data-window="maximize" aria-label="最大化"><svg viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11"/></svg></button>
@@ -178,5 +179,6 @@
   </main>
 </div>
 <script src="/app.js"></script>
+<script>document.getElementById("new-gui").href="/next"+location.search;</script>
 </body>
 </html>

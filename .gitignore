@@ -16,4 +16,10 @@
 /.impeccable/review/
 /.impeccable/build/
 /.impeccable/regions.json
-
+/design/gui-react/node_modules/
+/design/gui-react/dist/
+/design/gui-react/.vite/
+/release-v020-final/
+/release-v021/
+/release-v021-final/
+/evidence-private-cover.json

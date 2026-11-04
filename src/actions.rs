@@ -226,7 +226,20 @@ pub fn forward_parts(nodes: &[Node], shared: &Shared) -> Result<Vec<Part>> {
     let mut out = vec![];
     for node in nodes {
         let segments = if let Some(text) = node.content.as_str() {
-            crate::delivery::parse_cq(text)
+            // RedLang serializes the OneBot message array into a JSON string.
+            // Accept both that and a plain CQ string.
+            let mut decoded = serde_json::from_str::<serde_json::Value>(text).ok();
+            if let Some(serde_json::Value::String(inner)) = &decoded {
+                decoded = serde_json::from_str::<serde_json::Value>(inner).ok();
+            }
+            match decoded {
+                Some(serde_json::Value::Array(items)) => items,
+                Some(value) => value["message"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_else(|| crate::delivery::parse_cq(text)),
+                None => crate::delivery::parse_cq(text),
+            }
         } else {
             node.content
                 .as_array()
@@ -235,6 +248,10 @@ pub fn forward_parts(nodes: &[Node], shared: &Shared) -> Result<Vec<Part>> {
         };
         let mut buffer = format!("{}\n", node.name);
         for segment in segments {
+            // A merged-forward node cannot carry a quote/reply segment.
+            if segment["type"] == "reply" {
+                continue;
+            }
             if segment["type"] == "text" {
                 let text = segment["data"]["text"].as_str().context("节点文本无效")?;
                 for line in text.split_inclusive('\n') {
@@ -997,6 +1014,8 @@ impl Automation {
             }
             let mut sum = 0u64;
             let mut count = 0u64;
+            let mut green_max_x = 0i32;
+            let mut green_min_x = i32::MAX;
             let mut dark_min_x = 0i32;
             let mut dark_min_y = 0i32;
             let mut dark_max_x = 0i32;
@@ -1014,6 +1033,8 @@ impl Automation {
                         if g > r + 18 && g > b + 18 && g > 45 {
                             sum += x as u64;
                             count += 1;
+                            green_max_x = green_max_x.max(x as i32);
+                            green_min_x = green_min_x.min(x as i32);
                         }
                         if r < 120 && g < 120 && b < 120 {
                             if dark_count == 0 {
@@ -1050,7 +1071,8 @@ impl Automation {
                     (dark_min_y + dark_max_y) / 2 + window.top - origin.y,
                 )
             } else if count > 20 {
-                ((sum / count) as i32 + window.left - origin.x, y)
+                let right = (green_max_x - 25).max(green_min_x + 8);
+                (right + window.left - origin.x, y)
             } else {
                 // Cards without an exposed image child use the acknowledged
                 // outgoing row; never click the blank area outside the bubble.

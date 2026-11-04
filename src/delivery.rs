@@ -57,6 +57,25 @@ pub fn prepare(message: &Value, auto_escape: bool, shared: &Shared) -> Result<Ve
             .context("message must be text or segment array")?
             .clone()
     };
+    // RedReply sometimes serializes private messages as one text segment that
+    // still contains CQ codes (private encoder flattening). Expand those so a
+    // private image is not sent as literal "[CQ:image,...]" text.
+    let segments = if auto_escape {
+        segments
+    } else {
+        let mut expanded = Vec::with_capacity(segments.len());
+        for segment in segments {
+            let text = (segment["type"] == "text")
+                .then(|| segment["data"]["text"].as_str())
+                .flatten();
+            if let Some(text) = text.filter(|text| text.contains("[CQ:")) {
+                expanded.extend(parse_cq(text));
+            } else {
+                expanded.push(segment);
+            }
+        }
+        expanded
+    };
     let mut out = vec![];
     let (mut chars, mut images) = (0, 0);
     let deadline = Instant::now() + Duration::from_secs(8);

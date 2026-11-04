@@ -208,15 +208,84 @@ fn auto_recall_delay(message: &Value) -> Option<f64> {
     (delay > 0.).then(|| delay.clamp(3., 100.))
 }
 
+fn split_private_media(request: &Value) -> Option<(Value, Value)> {
+    if request["action"].as_str() != Some("send_private_msg") {
+        return None;
+    }
+    let message = &request["params"]["message"];
+    let segments = if let Some(text) = message.as_str() {
+        crate::delivery::parse_cq(text)
+    } else {
+        message.as_array()?.clone()
+    };
+    let mut images = vec![];
+    let mut others = vec![];
+    for segment in segments {
+        if segment["type"] == "image" {
+            images.push(segment);
+        } else {
+            others.push(segment);
+        }
+    }
+    if images.is_empty() {
+        return None;
+    }
+    let has_text = others.iter().any(|s| {
+        s["type"] == "at"
+            || (s["type"] == "text"
+                && s["data"]["text"]
+                    .as_str()
+                    .is_some_and(|text| !text.trim().is_empty()))
+    });
+    if !has_text {
+        return None;
+    }
+    // Keep the reply segment on the image job too: it carries the trigger id
+    // used as the batch source, so the image joins the same batch as the text
+    // and is recalled together with it.
+    let mut image_message: Vec<Value> = others
+        .iter()
+        .filter(|s| s["type"] == "reply")
+        .cloned()
+        .collect();
+    image_message.extend(images);
+    let mut image_request = request.clone();
+    image_request["params"]["message"] = Value::Array(image_message);
+    let mut text_request = request.clone();
+    text_request["params"]["message"] = Value::Array(others);
+    Some((image_request, text_request))
+}
+
 pub fn enqueue(shared: &Shared, c: &Config, request: &Value) -> Result<Value> {
     c.binding()?;
+    if let Some((image, text)) = split_private_media(request) {
+        let image_receipt = enqueue(shared, c, &image)?;
+        let mut text_receipt = enqueue(shared, c, &text)?;
+        if let Some(data) = text_receipt.get_mut("data") {
+            data["image_message_id"] = image_receipt["data"]["message_id"].clone();
+        }
+        return Ok(text_receipt);
+    }
     let mut request = request.clone();
     crate::compat::rewrite(shared, &mut request);
+    // The package calls send_group_forward_msg from its Telegram branch; in a
+    // private chat RedReply has no group id and sends it with group_id empty.
+    // Route that to the active private batch instead of failing group lookup.
+    // A private-context group forward has no group id. Only an explicit
+    // user_id may promote it; never guess the target from unrelated batches.
+    if request["action"] == "send_group_forward_msg"
+        && number(&request["params"]["group_id"]) == 0
+        && number(&request["params"]["user_id"]) > 0
+    {
+        request["action"] = "send_private_forward_msg".into();
+    }
     let request = &request;
     let action = request["action"].as_str().context("Missing action")?;
     let p = &request["params"];
     let group = action == "send_group_msg"
         || (action == "send_group_forward_msg" && number(&p["group_id"]) > 0)
+        || (action == "send_forward_msg"
+            && (p["message_type"] == "group" || number(&p["group_id"]) > 0))
         || (action == "send_msg" && (p["message_type"] == "group" || number(&p["group_id"]) > 0));
     let dest = number(&p[if group { "group_id" } else { "user_id" }]);
     let (name, _) = c
@@ -446,7 +515,58 @@ pub fn request_recall(shared: &Shared, id: u64, delay: Option<f64>) -> Result<Op
         bail!("撤回延迟不是有效数字");
     }
     let Some(item) = status(shared, id)? else {
-        return Ok(None);
+        // RedReply's private branch recalls the trigger id instead of an output
+        // id. Treat it as "recall every output registered for this trigger".
+        let batches = store(shared, |s| {
+            let mut stmt =
+                s.db.prepare("SELECT batch_id FROM batches WHERE source=?1")?;
+            let rows = stmt
+                .query_map([id.to_string()], |r| r.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })?;
+        if batches.is_empty() {
+            return Ok(None);
+        }
+        let seconds = delay
+            .map(|ms| crate::actions::recall_delay(&shared.config.read().unwrap().raw, ms / 1000.));
+        let mut recalled = vec![];
+        for batch in &batches {
+            let ids = store(shared, |s| {
+                let mut stmt = s
+                    .db
+                    .prepare("SELECT id FROM jobs WHERE batch_id=?1 AND status NOT IN ('cancelled','failed')")?;
+                let rows = stmt
+                    .query_map([batch], |r| r.get::<_, u64>(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })?;
+            for job in ids {
+                store(shared, |s| {
+                    let tx = s.db.transaction()?;
+                    if let Some(delay) = seconds {
+                        tx.execute("UPDATE jobs SET recall_delay=CASE WHEN recall_delay IS NULL THEN ?1 ELSE min(recall_delay,?1) END,recall_status=CASE WHEN recall_status='' THEN 'scheduled' ELSE recall_status END WHERE id=?2",params![delay,job])?;
+                    } else {
+                        tx.execute("UPDATE jobs SET recall_requested=1,recall_status='requested' WHERE id=?1",[job])?;
+                        tx.execute("UPDATE jobs SET status='cancelled',error='该次输出已请求撤回，取消尚未发送内容',finished=?1,recall_status='cancelled' WHERE id=?2 AND status IN ('queued','preparing')",params![config::now(),job])?;
+                    }
+                    tx.commit()?;
+                    Ok(())
+                })?;
+                recalled.push(job);
+            }
+        }
+        shared.log(&format!(
+            "触发撤回已登记：来源={id}，批次={batches:?}，输出={recalled:?}"
+        ));
+        return Ok(Some(json!({
+            "message_id":id,
+            "batch_ids":batches,
+            "recalled":recalled,
+            "recall_status":"queued",
+            "delay_seconds":seconds,
+            "recall_scope":"trigger"
+        })));
     };
     let batch = item["batch_id"].as_str().unwrap().to_owned();
     let seconds = delay
@@ -725,7 +845,7 @@ fn process_recall_with(
     mut recall: impl FnMut(u64) -> Result<()>,
 ) -> Result<bool> {
     let jobs = store(shared, |s| {
-        let mut q=s.db.prepare("SELECT id,recall_delay,recall_requested,recall_status,enqueued FROM jobs WHERE recall_requested=1 OR recall_delay IS NOT NULL ORDER BY id LIMIT 100")?;
+        let mut q=s.db.prepare("SELECT id,recall_delay,recall_requested,recall_status,enqueued FROM jobs WHERE (recall_requested=1 OR recall_delay IS NOT NULL) AND recall_status NOT IN ('recalled','cancelled','recall_failed') ORDER BY id LIMIT 100")?;
         Ok(q.query_map([], |r| {
             Ok((
                 r.get::<_, u64>(0)?,
@@ -776,7 +896,15 @@ fn process_recall_with(
             }
             continue;
         }
+        shared.log(&format!("撤回执行开始：消息ID={id}"));
         let result = recall(id);
+        shared.log(&format!(
+            "撤回执行结束：消息ID={id}，结果={}",
+            match &result {
+                Ok(()) => "成功".to_owned(),
+                Err(e) => format!("失败：{e}"),
+            }
+        ));
         let (state, error) = match &result {
             Ok(()) => ("recalled", String::new()),
             Err(e) => ("recall_failed", e.to_string()),
@@ -801,6 +929,42 @@ fn process_recall_with(
         return Ok(true);
     }
     Ok(false)
+}
+pub fn gui_jobs(data: &Path, limit: u32) -> Result<Value> {
+    let db = Connection::open_with_flags(
+        data.join("outbox.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    db.busy_timeout(Duration::from_millis(100))?;
+    let mut q = db.prepare(
+        "SELECT id,name,is_group,status,recall_status,error,enqueued FROM jobs ORDER BY id DESC LIMIT ?1",
+    )?;
+    let rows = q
+        .query_map([limit.max(1).min(200)], |r| {
+            Ok(json!({
+                "message_id": r.get::<_, u64>(0)?,
+                "name": r.get::<_, String>(1)?,
+                "group": r.get::<_, bool>(2)?,
+                "status": r.get::<_, String>(3)?,
+                "recall_status": r.get::<_, String>(4)?,
+                "error": r.get::<_, String>(5)?,
+                "enqueued": r.get::<_, f64>(6)?
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(Value::Array(rows))
+}
+pub fn gui_request_recall(data: &Path, id: u64) -> Result<Value> {
+    let db = Connection::open(data.join("outbox.sqlite3"))?;
+    db.busy_timeout(Duration::from_millis(800))?;
+    let changed = db.execute(
+        "UPDATE jobs SET recall_requested=1,recall_status='requested' WHERE id=?1 AND status IN ('queued','preparing','sent','uncertain')",
+        [id],
+    )?;
+    if changed == 0 {
+        bail!("任务 {id} 不存在或已完成，无法撤回");
+    }
+    Ok(json!({"message_id":id,"recall_status":"requested","recall_scope":"output"}))
 }
 pub fn gui_summary(data: &Path) -> Result<Value> {
     let db = Connection::open_with_flags(

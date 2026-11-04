@@ -25,6 +25,7 @@ use wry::WebViewBuilder;
 const HTML: &str = include_str!("../assets/gui/index.html");
 const CSS: &str = include_str!("../assets/gui/app.css");
 const JS: &str = include_str!("../assets/gui/app.js");
+const NEXT: &str = include_str!("../assets/gui/next.html");
 const AVATAR: &[u8] = include_bytes!("../assets/github-avatar.png");
 
 #[derive(Debug)]
@@ -218,6 +219,21 @@ fn read_request(
     Ok((method, target, headers, body))
 }
 
+fn response_cookie(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+    cookie: &str,
+) -> Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nSet-Cookie: {cookie}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )?;
+    stream.write_all(body)?;
+    Ok(())
+}
 fn response(stream: &mut TcpStream, status: &str, content_type: &str, body: &[u8]) -> Result<()> {
     write!(
         stream,
@@ -257,19 +273,56 @@ fn handle(backend: &Backend, mut stream: TcpStream) -> Result<()> {
             (k == name).then_some(v.to_owned())
         })
     };
-    let supplied = param("token").or_else(|| {
-        headers
-            .iter()
-            .find(|(n, _)| n == "x-token")
-            .map(|(_, v)| v.clone())
-    });
+    let supplied = param("token")
+        .or_else(|| {
+            headers
+                .iter()
+                .find(|(n, _)| n == "x-token")
+                .map(|(_, v)| v.clone())
+        })
+        .or_else(|| {
+            headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case("cookie"))
+                .and_then(|(_, v)| {
+                    v.split(';').find_map(|part| {
+                        part.trim()
+                            .strip_prefix("gui_token=")
+                            .map(|token| token.to_owned())
+                    })
+                })
+        });
     match (method.as_str(), path) {
-        ("GET", "/") => {
+        ("GET", "/next") => {
+            return response_cookie(
+                &mut stream,
+                "200 OK",
+                "text/html; charset=utf-8",
+                NEXT.as_bytes(),
+                &format!(
+                    "gui_token={}; Path=/; HttpOnly; SameSite=Strict",
+                    backend.token
+                ),
+            );
+        }
+        ("GET", "/classic") => {
             return response(
                 &mut stream,
                 "200 OK",
                 "text/html; charset=utf-8",
                 HTML.as_bytes(),
+            );
+        }
+        ("GET", "/") => {
+            return response_cookie(
+                &mut stream,
+                "200 OK",
+                "text/html; charset=utf-8",
+                NEXT.as_bytes(),
+                &format!(
+                    "gui_token={}; Path=/; HttpOnly; SameSite=Strict",
+                    backend.token
+                ),
             );
         }
         ("GET", "/app.css") => {
@@ -304,6 +357,8 @@ fn handle(backend: &Backend, mut stream: TcpStream) -> Result<()> {
     let result = match (method.as_str(), path) {
         ("GET", "/api/state") => state_json(backend),
         ("GET", "/api/status") => status_json(backend),
+        ("GET", "/api/jobs") => jobs_json(backend),
+        ("POST", "/api/recall") => recall_job(backend, &value),
         ("GET", "/api/windows") => windows_json(backend),
         ("POST", "/api/save") => save(backend, &value),
         ("POST", "/api/bind") => bind(backend, &value),
@@ -378,6 +433,20 @@ fn state_json(backend: &Backend) -> Result<Value> {
         "binding": binding_json(&c),
         "status": status
     }))
+}
+
+fn jobs_json(backend: &Backend) -> Result<Value> {
+    let c = backend.config.lock().unwrap().clone();
+    let data = c.path.parent().unwrap().join("data");
+    let jobs = crate::outbox::gui_jobs(&data, 60).unwrap_or_else(|_| json!([]));
+    Ok(json!({"jobs": jobs}))
+}
+
+fn recall_job(backend: &Backend, value: &Value) -> Result<Value> {
+    let id = value["message_id"].as_u64().context("缺少 message_id")?;
+    let c = backend.config.lock().unwrap().clone();
+    let data = c.path.parent().unwrap().join("data");
+    crate::outbox::gui_request_recall(&data, id)
 }
 
 fn status_json(backend: &Backend) -> Result<Value> {
