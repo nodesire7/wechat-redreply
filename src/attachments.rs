@@ -23,6 +23,10 @@ fn native_image(raw: &[u8]) -> Result<(std::borrow::Cow<'_, [u8]>, &'static str)
     image::load_from_memory(raw)?.write_to(&mut encoded, image::ImageFormat::Png)?;
     Ok((std::borrow::Cow::Owned(encoded.into_inner()), "png"))
 }
+pub(crate) fn image_fingerprint(raw: &[u8]) -> Result<String> {
+    use md5::{Digest, Md5};
+    Ok(hex::encode(Md5::digest(native_image(raw)?.0.as_ref())))
+}
 impl Automation {
     pub(crate) fn attach_image(&self, shared: &Shared, h: HWND, raw: &[u8]) -> Result<()> {
         use sha2::{Digest, Sha256};

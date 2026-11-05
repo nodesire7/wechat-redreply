@@ -27,8 +27,10 @@ try {
         platform = 'windows-x64'
         verified_wechat = '4.2.0.9'
         additional_ui_verification = @{ windows='Server 2019 build 17763'; wechat='4.2.0.12'; operations=@('recover chat page','group text','split text and image','recall test receipt') }
-        native_music_verified_wechat = '4.2.0.9'
+        native_music_verified_wechat = '4.2.0.12'
         native_music_profiles = @('4.2.0.9','4.2.0.12')
+        native_music_recipient_verification = 'Current QQ song identity, native card and recipient playback confirmed; source authorization still required'
+        native_recall_verification = @{ wechat='4.2.0.12'; limit_seconds=120; scope='original output'; operations=@('progress text','split text and image','large PNG','JPEG','native music and voice') }
         native_voice_profiles = @('4.2.0.12')
         native_voice_verification = @('recipient audible native bubble','server receipt','30-second delayed native recall')
         gui_renderer = 'Embedded React + WebView2, native fallback'

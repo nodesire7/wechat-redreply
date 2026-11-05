@@ -52,6 +52,7 @@ pub struct Shared {
     pub music_cache: RwLock<Vec<crate::music::NativeCard>>,
     pub timeline: Mutex<crate::message_view::Timelines>,
     pub bound_root: RwLock<Option<PathBuf>>,
+    pub account_wxid: RwLock<Option<String>>,
     pub ledger: Mutex<crate::actions::Ledger>,
     pub recall_watch: Mutex<std::collections::HashMap<String, Vec<Message>>>,
     pub staging: RwLock<Option<Peer>>,
@@ -89,6 +90,7 @@ impl Shared {
                 music_cache: RwLock::new(Vec::new()),
                 timeline: Mutex::new(Default::default()),
                 bound_root: RwLock::new(None),
+                account_wxid: RwLock::new(None),
                 ledger: Mutex::new(ledger),
                 recall_watch: Mutex::new(HashMap::new()),
                 staging: RwLock::new(None),
@@ -164,6 +166,9 @@ impl Shared {
         delivered
     }
     pub fn observe(&self, name: &str, message: &Message) {
+        if let Err(e) = crate::submitted_image::observe(self, name, message) {
+            self.log(&format!("保存图片发送关联失败：{e}"));
+        }
         if let Err(e) = crate::actions::confirm_database_recall(self, name, message) {
             self.log(&format!("保存数据库撤回确认失败：{e}"));
         }
@@ -203,7 +208,8 @@ impl Shared {
         self.changed.notify_all();
     }
     pub fn pending(&self, name: &str) -> Vec<Message> {
-        self.own
+        let mut pending = self
+            .own
             .lock()
             .unwrap()
             .rows
@@ -211,11 +217,13 @@ impl Shared {
             .map_or(vec![], |rows| {
                 rows.iter()
                     .filter(|r| {
-                        r.message.server_id == 0 && r.at.elapsed() < Duration::from_secs(15)
+                        r.message.server_id == 0 && r.at.elapsed() < Duration::from_secs(120)
                     })
                     .map(|r| r.message.clone())
                     .collect()
-            })
+            });
+        pending.extend(crate::submitted_image::pending_rows(self, name));
+        pending
     }
     pub fn checkpoint(&self) -> u64 {
         self.own.lock().unwrap().serial

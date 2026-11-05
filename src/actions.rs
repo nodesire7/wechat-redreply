@@ -49,7 +49,17 @@ pub fn append_sent(
         nodes: None,
         recalled: false,
     });
-    record.messages.push(tracked);
+    if let Some(old) = record
+        .messages
+        .iter_mut()
+        .find(|m| m.row.key() == tracked.row.key())
+    {
+        if !old.was_recalled() {
+            *old = tracked;
+        }
+    } else {
+        record.messages.push(tracked);
+    }
     drop(ledger);
     save(shared)
 }
@@ -70,12 +80,19 @@ pub struct Ledger {
     pub sent: BTreeMap<u64, Record>,
     #[serde(default)]
     pub scheduled: BTreeMap<u64, f64>,
+    #[serde(default)]
+    pub image_submissions: Vec<crate::submitted_image::Submission>,
 }
 fn reconcile_row(ledger: &mut Ledger, name: &str, row: &Message) -> Vec<u64> {
     if row.kind != 10000 || !row.content.contains("revokemsg") || row.server_id == 0 {
         return vec![];
     }
     let mut changed = vec![];
+    let pending = ledger
+        .image_submissions
+        .iter()
+        .map(|s| s.output_id)
+        .collect::<std::collections::HashSet<_>>();
     for (&id, record) in &mut ledger.sent {
         if record.name != name || record.recalled {
             continue;
@@ -91,8 +108,9 @@ fn reconcile_row(ledger: &mut Ledger, name: &str, row: &Message) -> Vec<u64> {
                 changed.push(id);
             }
         }
-        record.recalled =
-            !record.messages.is_empty() && record.messages.iter().all(Tracked::was_recalled);
+        record.recalled = !record.messages.is_empty()
+            && !pending.contains(&id)
+            && record.messages.iter().all(Tracked::was_recalled);
     }
     changed.sort_unstable();
     changed.dedup();
@@ -318,7 +336,9 @@ pub fn forward_parts(nodes: &[Node], shared: &Shared) -> Result<Vec<Part>> {
 pub fn save(shared: &Shared) -> Result<()> {
     let mut ledger = shared.ledger.lock().unwrap();
     while ledger.sent.len() > 512 {
-        ledger.sent.pop_first();
+        if let Some((id, _)) = ledger.sent.pop_first() {
+            ledger.image_submissions.retain(|s| s.output_id != id);
+        }
     }
     config::atomic(
         &shared.data.join("messages.json"),
@@ -344,7 +364,9 @@ pub fn ensure_recall(shared: &Shared, id: u64) -> Result<Record> {
         }
     }
     if changed {
-        record.recalled = record.messages.iter().all(Tracked::was_recalled);
+        record.recalled = !record.messages.is_empty()
+            && !ledger.image_submissions.iter().any(|s| s.output_id == id)
+            && record.messages.iter().all(Tracked::was_recalled);
         ledger.sent.insert(id, record.clone());
     }
     drop(ledger);
@@ -422,7 +444,7 @@ impl Automation {
                 let before = shared.checkpoint();
                 let at = config::now();
                 self.send_part(shared, h, &staging.name, false, part, job)?;
-                let tracked = self.track(shared, h, &staging.name, part, before, at)?;
+                let tracked = self.track(shared, h, &staging.name, part, before, at, None)?;
                 if tracked.runtime_id.is_empty() {
                     bail!("中转消息没有可验证的控件标识，未选择历史消息");
                 }
@@ -877,10 +899,16 @@ impl Automation {
         part: &Part,
         before: u64,
         sent_at: f64,
+        output_id: Option<u64>,
     ) -> Result<Tracked> {
         if crate::delivery::network(part) {
             bail!("原生媒体应使用匹配的网络回执，不能伪造数据库确认")
         }
+        let image_hash = if let Part::Image(raw) = part {
+            Some(crate::attachments::image_fingerprint(raw)?)
+        } else {
+            None
+        };
         let row = shared
             .own
             .lock()
@@ -898,7 +926,17 @@ impl Automation {
                                     r.message.kind == 1
                                         && normalize(&r.message.content) == normalize(t)
                                 }
-                                Part::Image(_) => r.message.kind == 3,
+                                Part::Image(_) => {
+                                    r.message.create_time as f64 >= sent_at.floor() - 1.
+                                        && image_hash.as_ref().is_some_and(|hash| {
+                                            crate::submitted_image::matches_image(&r.message, hash)
+                                        })
+                                        && output_id.is_none_or(|id| {
+                                            crate::submitted_image::assigned_to(
+                                                shared, id, &r.message,
+                                            )
+                                        })
+                                }
                                 Part::Music(card) => {
                                     r.message.kind == 49
                                         && crate::music::parse_native(&r.message.content)
@@ -1406,7 +1444,7 @@ impl Automation {
                 .clone();
             let mut changed = false;
             for part in &mut record.messages {
-                if part.native_cgi.is_none() && !part.was_recalled() {
+                if part.native_cgi.is_none() && !part.was_recalled() && part.row.server_id > 0 {
                     part.native_cgi = Some(crate::music_backend::database_recall_receipt(
                         &from, &to, &part.row,
                     )?);
@@ -1426,7 +1464,10 @@ impl Automation {
             }
         }
         let h = crate::native::validate_window(&c.binding()?)?;
-        let has_ui = record.messages.iter().any(|m| m.native_cgi.is_none());
+        let has_ui = record
+            .messages
+            .iter()
+            .any(|m| m.native_cgi.is_none() && m.row.server_id > 0);
         let _guard = if has_ui {
             Some(crate::popup::Guard::install(h, &shared.data)?)
         } else {
@@ -1450,7 +1491,7 @@ impl Automation {
             std::thread::sleep(std::time::Duration::from_millis(600));
         }
         for tracked in ordered {
-            if tracked.was_recalled() {
+            if tracked.was_recalled() || tracked.row.server_id == 0 {
                 continue;
             }
             let attempt = (|| -> Result<()> {
@@ -1609,10 +1650,13 @@ impl Automation {
                 }
             }
         }
+        let pending = crate::submitted_image::pending_since(shared, id);
         {
             let mut ledger = shared.ledger.lock().unwrap();
             if let Some(r) = ledger.sent.get_mut(&id) {
-                r.recalled = r.messages.iter().all(Tracked::was_recalled);
+                r.recalled = pending.is_none()
+                    && !r.messages.is_empty()
+                    && r.messages.iter().all(Tracked::was_recalled);
             }
             ledger.scheduled.remove(&id);
         }
@@ -1623,6 +1667,12 @@ impl Automation {
                 errors.len(),
                 errors.join("；")
             );
+        }
+        if let Some(at) = pending {
+            if config::now() - at >= recall_limit(&c.raw) {
+                bail!("已提交图片仍未确认，已到微信撤回时限；未将部分撤回标记为全部成功");
+            }
+            return Err(crate::submitted_image::AwaitingConfirmation.into());
         }
         shared.log("该次触发的撤回已确认（微信数据库或原生网络回执）");
         Ok(())

@@ -798,6 +798,28 @@ fn process_recall_with(
         if due.is_none_or(|due| due > config::now()) {
             continue;
         }
+        if let Some(at) = crate::submitted_image::pending_since(shared, id) {
+            let cap = crate::actions::recall_limit(&shared.config.read().unwrap().raw);
+            let known_done = shared
+                .ledger
+                .lock()
+                .unwrap()
+                .sent
+                .get(&id)
+                .is_some_and(|r| {
+                    r.messages
+                        .iter()
+                        .filter(|m| m.row.server_id > 0)
+                        .all(crate::actions::Tracked::was_recalled)
+                });
+            if known_done && config::now() - at < cap {
+                store(shared, |s| {
+                    s.db.execute("UPDATE jobs SET recall_requested=1,recall_status='requested',recall_error=?1 WHERE id=?2",params![crate::submitted_image::AwaitingConfirmation.to_string(),id])?;
+                    Ok(())
+                })?;
+                continue;
+            }
+        }
         let cancelled_now = store(shared, |s| {
             let tx = s.db.transaction()?;
             tx.execute(
@@ -819,6 +841,16 @@ fn process_recall_with(
         }
         shared.log(&format!("撤回执行开始：消息ID={id}"));
         let result = recall(id);
+        if result
+            .as_ref()
+            .is_err_and(|e| e.is::<crate::submitted_image::AwaitingConfirmation>())
+        {
+            store(shared, |s| {
+                s.db.execute("UPDATE jobs SET recall_requested=1,recall_status='requested',recall_error=?1 WHERE id=?2",params![crate::submitted_image::AwaitingConfirmation.to_string(),id])?;
+                Ok(())
+            })?;
+            continue;
+        }
         shared.log(&format!(
             "撤回执行结束：消息ID={id}，结果={}",
             match &result {
@@ -1103,6 +1135,69 @@ mod tests {
             claim(&s).unwrap().is_none(),
             "no failure is blindly retried"
         );
+    }
+    #[test]
+    fn pending_image_recall_is_deferred_without_claiming_success_or_blocking_other_outputs() {
+        let d = tempfile::tempdir().unwrap();
+        let (c, s) = setup(d.path());
+        let id = send(&s, &c, "甲", "first")["message_id"].as_u64().unwrap();
+        let keep = send(&s, &c, "甲", "sibling")["message_id"]
+            .as_u64()
+            .unwrap();
+        let at = config::now();
+        track(&s, &c, id, at, 1);
+        {
+            let mut l = s.ledger.lock().unwrap();
+            let text = &mut l.sent.get_mut(&id).unwrap().messages[0];
+            text.row.kind = 10000;
+            text.row.content = "<revokemsg/>".into();
+            l.image_submissions
+                .push(crate::submitted_image::Submission {
+                    output_id: id,
+                    name: "甲".into(),
+                    binding: c.binding().unwrap(),
+                    sender: "wxid_self".into(),
+                    submitted_at: at,
+                    md5: "00000000000000000000000000000000".into(),
+                });
+        }
+        request_recall(&s, id, None).unwrap();
+        assert!(!process_recall_with(&s, |_| panic!("no confirmed image identity yet")).unwrap());
+        assert_eq!(
+            status(&s, id).unwrap().unwrap()["recall_status"],
+            "requested"
+        );
+        assert!(!s.ledger.lock().unwrap().sent[&id].recalled);
+        assert_eq!(
+            claim(&s).unwrap().unwrap().id,
+            keep,
+            "waiting for an image ACK must not block the sender queue"
+        );
+        *s.account_wxid.write().unwrap() = Some("wxid_self".into());
+        let image = crate::database::Message {
+            local_id: 42,
+            server_id: 123,
+            sort_seq: 99,
+            create_time: at as i64,
+            kind: 3,
+            sender: "wxid_self".into(),
+            content: "<msg><img md5=\"00000000000000000000000000000000\"/></msg>".into(),
+            shard: "m".into(),
+        };
+        s.observe("甲", &image);
+        assert!(
+            process_recall_with(&s, |actual| {
+                assert_eq!(actual, id);
+                assert_eq!(s.ledger.lock().unwrap().sent[&actual].messages.len(), 2);
+                Ok(())
+            })
+            .unwrap()
+        );
+        assert_eq!(
+            status(&s, id).unwrap().unwrap()["recall_status"],
+            "recalled"
+        );
+        assert_eq!(status(&s, keep).unwrap().unwrap()["recall_status"], "");
     }
     #[test]
     fn withdrawal_notices_schedule_early_recall() {

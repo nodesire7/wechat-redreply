@@ -24,6 +24,7 @@ mod outbox;
 mod popup;
 mod record_card;
 mod service;
+mod submitted_image;
 mod telemetry;
 mod ui_readiness;
 mod voice;

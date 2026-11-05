@@ -224,7 +224,7 @@ Secondary buttons use the working surface, reading ink and a one-pixel line. Hov
 
 ### Inputs / Fields
 
-Actual HTML inputs, selects and textareas preserve editing, selection and browser keyboard behavior inside WebView2. Fields have a (38px) minimum height. Labels sit above them with `field-gap`; hints remain below. Textareas resize vertically and use (1.8) line-height. The token is masked by default and has an explicitly named reveal action. Saving disables editable fields, including the music-link select.
+Actual HTML inputs, selects and textareas preserve editing, selection and browser keyboard behavior inside WebView2. Fields have a (38px) minimum height. Labels sit above them with `field-gap`; hints remain below. Textareas resize vertically and use (1.8) line-height. The token is masked by default and has an explicitly named reveal action. Saving disables editable fields. The music-card cell is static label and secondary copy in the existing two-column grid, explaining the current-song page, audio, QQ track identity and source authorization; it has no editable link-mode selector.
 
 The token field groups its input and reveal button within one border. WSS stays in a native HTML disclosure. The form's wrappers do not replace functional labels with decoration.
 

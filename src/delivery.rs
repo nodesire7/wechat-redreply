@@ -835,23 +835,16 @@ impl Automation {
                 self.cancel_actions(h, &shared.data);
                 return Err(error);
             }
-            let tracked = self.track(shared, h, &job.name, part, checkpoint, sent_at)?;
-            {
-                let mut ledger = shared.ledger.lock().unwrap();
-                let record = ledger
-                    .sent
-                    .entry(job.id)
-                    .or_insert_with(|| crate::actions::Record {
-                        name: job.name.clone(),
-                        group: job.group,
-                        binding: binding.clone(),
-                        messages: vec![],
-                        nodes: None,
-                        recalled: false,
-                    });
-                record.messages.push(tracked);
-            }
-            crate::actions::save(shared)?;
+            let tracked = self.track(
+                shared,
+                h,
+                &job.name,
+                part,
+                checkpoint,
+                sent_at,
+                Some(job.id),
+            )?;
+            crate::actions::append_sent(shared, job, &binding, tracked)?;
         }
         Ok(())
     }
@@ -925,6 +918,10 @@ impl Automation {
                 }
                 self.verify(h, target, group)?;
                 job.check_submission(shared)?;
+                let submitted_at = config::now();
+                if let Part::Image(raw) = part {
+                    crate::submitted_image::register(shared, job, target, raw)?;
+                }
                 invoked = true;
                 self.click_native(&button, h)?;
                 let (kind, text) = match part {
@@ -934,7 +931,23 @@ impl Automation {
                         unreachable!("media uses native network delivery")
                     }
                 };
-                if !shared.confirm(target, kind, text, before) {
+                let confirmed = if let Part::Image(raw) = part {
+                    let hash = crate::attachments::image_fingerprint(raw)?;
+                    crate::submitted_image::wait(
+                        shared,
+                        target,
+                        &hash,
+                        before,
+                        submitted_at,
+                        (target == job.name
+                            && matches!(&job.operation, crate::actions::Operation::Send))
+                        .then_some(job.id),
+                        (Instant::now() + Duration::from_secs(20)).min(job.deadline),
+                    )
+                } else {
+                    shared.confirm(target, kind, text, before)
+                };
+                if !confirmed {
                     bail!("未观察到新的微信服务器消息编号；发送可能已尝试，不会自动重发");
                 }
                 shared.log(&format!(
