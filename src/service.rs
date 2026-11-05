@@ -52,6 +52,7 @@ pub struct Shared {
     pub music_cache: RwLock<Vec<crate::music::NativeCard>>,
     pub timeline: Mutex<crate::message_view::Timelines>,
     pub bound_root: RwLock<Option<PathBuf>>,
+    pub account_wxid: RwLock<Option<String>>,
     pub ledger: Mutex<crate::actions::Ledger>,
     pub recall_watch: Mutex<std::collections::HashMap<String, Vec<Message>>>,
     pub staging: RwLock<Option<Peer>>,
@@ -89,6 +90,7 @@ impl Shared {
                 music_cache: RwLock::new(Vec::new()),
                 timeline: Mutex::new(Default::default()),
                 bound_root: RwLock::new(None),
+                account_wxid: RwLock::new(None),
                 ledger: Mutex::new(ledger),
                 recall_watch: Mutex::new(HashMap::new()),
                 staging: RwLock::new(None),
@@ -164,6 +166,9 @@ impl Shared {
         delivered
     }
     pub fn observe(&self, name: &str, message: &Message) {
+        if let Err(e) = crate::submitted_image::observe(self, name, message) {
+            self.log(&format!("保存图片发送关联失败：{e}"));
+        }
         if let Err(e) = crate::actions::confirm_database_recall(self, name, message) {
             self.log(&format!("保存数据库撤回确认失败：{e}"));
         }
@@ -203,7 +208,8 @@ impl Shared {
         self.changed.notify_all();
     }
     pub fn pending(&self, name: &str) -> Vec<Message> {
-        self.own
+        let mut pending = self
+            .own
             .lock()
             .unwrap()
             .rows
@@ -211,11 +217,13 @@ impl Shared {
             .map_or(vec![], |rows| {
                 rows.iter()
                     .filter(|r| {
-                        r.message.server_id == 0 && r.at.elapsed() < Duration::from_secs(15)
+                        r.message.server_id == 0 && r.at.elapsed() < Duration::from_secs(120)
                     })
                     .map(|r| r.message.clone())
                     .collect()
-            })
+            });
+        pending.extend(crate::submitted_image::pending_rows(self, name));
+        pending
     }
     pub fn checkpoint(&self) -> u64 {
         self.own.lock().unwrap().serial
@@ -263,6 +271,7 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
         "forward",
         "forward-and-recall",
         "image-and-recall",
+        "voice-and-recall",
         "scheduled-recall",
         "locate-only",
         "virtualized-recall",
@@ -376,15 +385,13 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
             let nodes = crate::actions::nodes(&data, &shared)?;
             let parts = crate::actions::forward_parts(&nodes, &shared)?;
             (crate::actions::Operation::Forward(nodes), parts)
-        } else if mode == "image-and-recall" {
+        } else if mode == "image-and-recall" || mode == "voice-and-recall" {
             let message = config
                 .raw
                 .get("native_test_message")
                 .context("Missing native_test_message")?;
-            (
-                crate::actions::Operation::Send,
-                crate::delivery::prepare(message, false, &shared)?,
-            )
+            let parts = crate::delivery::prepare(message, false, &shared)?;
+            (crate::actions::Operation::Send, parts)
         } else {
             (
                 crate::actions::Operation::Send,
@@ -410,14 +417,24 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
         automation.send(&shared, &job)?;
         input_phases.push(snapshot("after_send"));
         let sent = started.elapsed().as_secs_f64();
-        let h = native::validate_window(&config.binding()?)?;
-        // A diagnostic screenshot must not prevent cleanup of a confirmed
-        // test message on a remote desktop with unavailable composition.
-        let _ = native::capture(h).and_then(|image| {
-            image.save(shared.data.join(format!("native-test-{mode}.png")))?;
-            Ok(())
-        });
-        input_phases.push(snapshot("after_capture"));
+        // Opt-in only: a diagnostic PrintWindow can wake remote composition.
+        // Delivery tests must measure the real operation without that extra UI
+        // work. A requested capture still cannot prevent test-message cleanup.
+        if std::env::args().any(|a| a == "--capture-test-artifacts") {
+            let h = native::validate_window(&config.binding()?)?;
+            let _ = native::capture(h).and_then(|image| {
+                image.save(shared.data.join(format!("native-test-{mode}.png")))?;
+                Ok(())
+            });
+            input_phases.push(snapshot("after_capture"));
+        }
+        if mode == "voice-and-recall" {
+            let hold = config.raw["native_test_hold_seconds"]
+                .as_u64()
+                .unwrap_or(0)
+                .min(60);
+            std::thread::sleep(Duration::from_secs(hold));
+        }
         if mode == "scheduled-recall" {
             let delay = config.raw["native_test_delay_ms"].as_f64().unwrap_or(5000.);
             crate::actions::schedule(&shared, id, delay)?;
@@ -445,7 +462,7 @@ fn native_test(config: Config, mode: &str, report: Option<String>) -> Result<()>
             input_phases.push(snapshot("after_recall"));
         }
         Ok(
-            json!({"mode":mode,"target":name,"group":group,"message_id":id,"send_seconds":sent,"total_seconds":started.elapsed().as_secs_f64(),"database_confirmed":true,"recall_confirmed":mode.ends_with("recall"),"initial_chat_title_available":initial_chat_title}),
+            json!({"mode":mode,"target":name,"group":group,"message_id":id,"send_seconds":sent,"total_seconds":started.elapsed().as_secs_f64(),"confirmation":crate::delivery::confirmation(&job.parts),"database_confirmed":crate::delivery::confirmation(&job.parts)=="database","native_server_confirmed":crate::delivery::confirmation(&job.parts)!="database","recall_confirmed":mode.ends_with("recall"),"initial_chat_title_available":initial_chat_title}),
         )
     })();
     if result.is_err() {
@@ -578,6 +595,15 @@ pub fn entry() -> Result<()> {
         println!("{value}");
         return Ok(());
     }
+    if args.iter().any(|s| s == "--voice-probe") {
+        crate::voice::inspect(&config)?;
+        let value = crate::music_backend::rpc(&config, json!({"mode":"voice_construct"}))?;
+        if let Some(path) = option("--report") {
+            config::atomic(std::path::Path::new(&path), &value)?;
+        }
+        println!("{value}");
+        return Ok(());
+    }
     if args.iter().any(|s| s == "--input-state") {
         let binding = config.binding()?;
         let snap = native::input_snapshot();
@@ -679,10 +705,32 @@ pub fn entry() -> Result<()> {
         return crate::maintenance::capture_settings(&config, std::path::Path::new(&path));
     }
     if args.iter().any(|s| s == "--close-clean-settings") {
+        if let (Some(pid), Some(created)) = (option("--gui-pid"), option("--gui-created-at")) {
+            let closed = crate::maintenance::clean_web_settings(
+                &config,
+                pid.parse()?,
+                created.parse()?,
+                true,
+            )?;
+            println!("{}", json!({"closed":closed}));
+            return Ok(());
+        }
         println!(
             "{}",
             serde_json::json!({"closed":crate::maintenance::close_clean_settings(&config)?})
         );
+        return Ok(());
+    }
+    if args.iter().any(|s| s == "--probe-clean-settings") {
+        let clean = crate::maintenance::clean_web_settings(
+            &config,
+            option("--gui-pid").context("缺少设置PID")?.parse()?,
+            option("--gui-created-at")
+                .context("缺少设置进程时间")?
+                .parse()?,
+            false,
+        )?;
+        println!("{}", json!({"clean":clean}));
         return Ok(());
     }
     if args.iter().any(|s| s == "--picker-probe") {

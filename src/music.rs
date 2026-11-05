@@ -14,6 +14,13 @@ pub struct NativeCard {
 pub struct OutgoingMusic {
     pub card: MusicCard,
     pub app_id: String,
+    pub link_mode: PlaybackLink,
+    pub playback_verified: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlaybackLink {
+    Audio,
+    Source,
 }
 pub fn outgoing(request: &MusicRequest, shared: &crate::service::Shared) -> Result<OutgoingMusic> {
     let card = match request {
@@ -28,8 +35,21 @@ pub fn outgoing(request: &MusicRequest, shared: &crate::service::Shared) -> Resu
     let app_id = include_str!("../assets/qq-music-app-id.txt")
         .trim()
         .to_owned();
-    native_appmsg(&card, &app_id)?;
-    Ok(OutgoingMusic { card, app_id })
+    let link_mode = match shared.config.read().unwrap().raw["music_link_mode"]
+        .as_str()
+        .unwrap_or("audio")
+    {
+        "audio" => PlaybackLink::Audio,
+        "source" => PlaybackLink::Source,
+        _ => bail!("音乐卡跳转方式须为audio或source"),
+    };
+    native_appmsg_with_mode(&card, &app_id, link_mode)?;
+    Ok(OutgoingMusic {
+        card,
+        app_id,
+        link_mode,
+        playback_verified: false,
+    })
 }
 
 pub(crate) fn native_app_id(xml: &str) -> Option<String> {
@@ -65,6 +85,13 @@ pub(crate) fn native_app_id(xml: &str) -> Option<String> {
 /// Create the actual type3 payload. Media and identity belong to this request;
 /// signed thumbnail keys/lyrics/source-account fields from an old song are never copied.
 pub fn native_appmsg(card: &MusicCard, app_id: &str) -> Result<String> {
+    native_appmsg_with_mode(card, app_id, PlaybackLink::Audio)
+}
+pub fn native_appmsg_with_mode(
+    card: &MusicCard,
+    app_id: &str,
+    _link_mode: PlaybackLink,
+) -> Result<String> {
     if card.provider != Provider::Qq
         || app_id.len() != 18
         || !app_id.starts_with("wx")
@@ -76,40 +103,12 @@ pub fn native_appmsg(card: &MusicCard, app_id: &str) -> Result<String> {
         .audio_url
         .as_deref()
         .context("音乐请求缺少真实播放地址")?;
-    // WeChat refuses cleartext media URLs in cards.  QQ Music's CDN serves
-    // the same object over HTTPS, so normalize before writing the XML.
-    let audio = if let Some(rest) = audio.strip_prefix("http://") {
-        format!("https://{rest}")
-    } else {
-        audio.to_owned()
-    };
+    let audio = playback_url(audio)?;
     use quick_xml::escape::escape;
-    // Match the card shape WeChat itself produces for QQ Music: the play page
-    // uses i.y.qq.com with the WeChat share parameters, and <appinfo> is a
-    // sibling of <appmsg> inside <msg>, not a child of <appmsg>.
-    let page = if card.provider == Provider::Qq {
-        if let Ok(parsed) = url::Url::parse(&card.page_url) {
-            let songmid = parsed
-                .query_pairs()
-                .find(|(key, _)| key == "songmid")
-                .map(|(_, value)| value.into_owned())
-                .or_else(|| {
-                    parsed
-                        .path_segments()
-                        .and_then(|mut parts| parts.next_back().map(str::to_owned))
-                });
-            match songmid {
-                Some(songmid) => format!(
-                    "https://i.y.qq.com/v8/playsong.html?platform=11&appshare=android_qq&songmid={songmid}&type=0&appsongtype=1&_wv=1&source=weixin"
-                ),
-                None => card.page_url.clone(),
-            }
-        } else {
-            card.page_url.clone()
-        }
-    } else {
-        card.page_url.clone()
-    };
+    // QQ's native card has separate page and stream fields. Replacing its page
+    // with an MP3 URL broke recipient playback despite a valid direct stream.
+    // Keep the supplied song identity page and the caller's actual audio.
+    let page = card.page_url.as_str();
     let mut out = format!("<appmsg appid=\"{app_id}\" sdkver=\"0\">");
     for (name, text) in [
         ("title", card.title.as_str()),
@@ -117,16 +116,108 @@ pub fn native_appmsg(card: &MusicCard, app_id: &str) -> Result<String> {
         ("action", "view"),
         ("type", "3"),
         ("showtype", "0"),
-        ("url", page.as_str()),
+        ("content", ""),
+        ("url", page),
         ("dataurl", audio.as_str()),
+        ("lowurl", ""),
+        ("lowdataurl", ""),
         ("thumburl", card.image_url.as_deref().unwrap_or("")),
         ("songalbumurl", card.image_url.as_deref().unwrap_or("")),
     ] {
         out.push_str(&format!("<{name}>{}</{name}>", escape(text)));
     }
+    // The observed provider format prefixes the current explicit QQ songmid;
+    // numeric song IDs and ambiguous pages do not establish that identity.
+    if let Some(TrackKey::QqSongMid(mid)) = card.track_key()
+        && mid.len() == 14
+        && mid.bytes().all(|b| b.is_ascii_alphanumeric())
+    {
+        out.push_str(&format!(
+            "<musicShareItem><mid>getlinkclisdkmid_{mid}</mid></musicShareItem>"
+        ));
+    }
     out.push_str("<appattach/><extinfo/></appmsg>");
-    out.push_str("<appinfo><version>54</version><appname>QQ音乐</appname></appinfo>");
     Ok(out)
+}
+
+pub fn playback_url(audio: &str) -> Result<String> {
+    let parsed = url::Url::parse(audio).map_err(|_| anyhow::anyhow!("音乐播放地址无效"))?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        bail!("音乐播放地址须为无用户凭据的HTTP(S)地址");
+    }
+    // A successful desktop HTTP probe is not evidence that WeChat's embedded
+    // player accepts a substituted scheme. Preserve the supplied URL exactly.
+    Ok(audio.to_owned())
+}
+
+/// Check the actual URL anonymously, as the receiving WeChat will. Do not leak
+/// signed addresses through reqwest errors. A 200 login page is not audio.
+pub fn verify_playback(card: &MusicCard) -> Result<()> {
+    use std::{io::Read, time::Duration};
+    let audio = playback_url(card.audio_url.as_deref().context("缺少音乐播放地址")?)?;
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(6))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()?;
+    let response = client
+        .get(audio)
+        .header("Range", "bytes=0-4095")
+        .send()
+        .map_err(|_| anyhow::anyhow!("音乐直链连接失败或超时；请更新点歌音源"))?;
+    let status = response.status();
+    if !status.is_success() {
+        bail!(
+            "音乐直链HTTP {}；需要更新音源或有效授权，未发送不可播卡片",
+            status.as_u16()
+        );
+    }
+    let mime = response
+        .headers()
+        .get("content-type")
+        .and_then(|s| s.to_str().ok())
+        .unwrap_or("")
+        .to_owned();
+    let mut prefix = Vec::new();
+    response
+        .take(4096)
+        .read_to_end(&mut prefix)
+        .map_err(|_| anyhow::anyhow!("音乐音频读取失败"))?;
+    validate_audio_prefix(&mime, &prefix)
+}
+fn validate_audio_prefix(mime: &str, prefix: &[u8]) -> Result<()> {
+    let mime = mime
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let text = String::from_utf8_lossy(prefix)
+        .trim_start()
+        .to_ascii_lowercase();
+    let media = prefix.starts_with(b"ID3")
+        || prefix.starts_with(b"fLaC")
+        || prefix.starts_with(b"OggS")
+        || prefix.starts_with(b"RIFF")
+        || prefix.starts_with(b"MAC ")
+        || (prefix.len() > 8 && &prefix[4..8] == b"ftyp")
+        || (prefix.len() > 1 && prefix[0] == 0xff && prefix[1] & 0xe0 == 0xe0);
+    if prefix.is_empty()
+        || mime.contains("html")
+        || mime.contains("json")
+        || text.starts_with('<')
+        || text.starts_with('{')
+        || text.starts_with('[')
+        || !(media || mime.starts_with("audio/"))
+    {
+        bail!("音乐直链返回登录页、错误页或非音频内容；请提供可直接播放的授权音源");
+    }
+    Ok(())
 }
 
 /// Parse the outer appmsg only. Quoted cards inside type57 and merged type19
@@ -595,6 +686,79 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn native_music_getlink_mid_uses_current_qq_songmid() {
+        for page in [
+            "https://y.qq.com/n/ryqq/songDetail/AbC123dEf456Gh",
+            "https://i.y.qq.com/v8/playsong.html?songmid=AbC123dEf456Gh",
+        ] {
+            let mut card = qq(page);
+            card.audio_url = Some("http://audio.example/Current.mp3?sig=Case&x=1".into());
+            let xml = native_appmsg(&card, "wx0123456789abcdef").unwrap();
+            assert!(xml.contains(
+                "<musicShareItem><mid>getlinkclisdkmid_AbC123dEf456Gh</mid></musicShareItem>"
+            ));
+        }
+    }
+
+    #[test]
+    fn native_music_getlink_mid_does_not_invent_song_identity() {
+        for page in [
+            "https://i.y.qq.com/v8/playsong.html?songid=12345678901234",
+            "https://i.y.qq.com/v8/playsong.html?songmid=AbC123dEf456Gh&songmid=ZyX987wVu654Ts",
+            "https://y.qq.com/n/ryqq/songDetail/AbC123dEf456G",
+            "https://y.qq.com/n/ryqq/songDetail/AbC123dEf456Gh9",
+            "https://y.qq.com/n/ryqq/songDetail/AbC123dEf456G_",
+            "https://y.qq.com/n/ryqq/songDetail/AbC123dEf456Gé",
+        ] {
+            let mut card = qq(page);
+            card.audio_url = Some("http://audio.example/Current.mp3?sig=Case&x=1".into());
+            let xml = native_appmsg(&card, "wx0123456789abcdef").unwrap();
+            assert!(!xml.contains("<musicShareItem>"));
+        }
+    }
+
+    #[test]
+    fn native_song_page_is_not_replaced_by_the_audio_stream() {
+        let mut card = qq("https://y.qq.com/n/ryqq/songDetail/ThisSong");
+        card.audio_url = Some("https://audio.example/Track.mp3?sig=Case&x=1".into());
+        let xml = native_appmsg(&card, "wx0123456789abcdef").unwrap();
+        assert!(xml.contains("<url>https://y.qq.com/n/ryqq/songDetail/ThisSong</url>"));
+    }
+
+    #[test]
+    fn music_card_keeps_native_page_and_supplied_audio_as_distinct_fields() {
+        let card = MusicCard::new(
+            Provider::Qq,
+            "本次曲目".into(),
+            "歌手".into(),
+            "https://y.qq.com/n/ryqq/songDetail/ThisSong".into(),
+            "http://dl.stream.qqmusic.qq.com/This.mp3?vkey=KeepCase&src=1".into(),
+            String::new(),
+        )
+        .unwrap();
+        let xml = native_appmsg(&card, "wx0123456789abcdef").unwrap();
+        assert!(xml.contains("<url>https://y.qq.com/n/ryqq/songDetail/ThisSong</url>"));
+        assert!(xml.contains(
+            "<dataurl>http://dl.stream.qqmusic.qq.com/This.mp3?vkey=KeepCase&amp;src=1</dataurl>"
+        ));
+        assert!(!xml.contains("playsong.html"));
+        let source =
+            native_appmsg_with_mode(&card, "wx0123456789abcdef", PlaybackLink::Source).unwrap();
+        assert!(source.contains("<url>https://y.qq.com/n/ryqq/songDetail/ThisSong</url>"));
+        assert_eq!(
+            playback_url("http://other.example/a?sig=KeepCase").unwrap(),
+            "http://other.example/a?sig=KeepCase"
+        );
+    }
+    #[test]
+    fn audio_validation_rejects_successful_html_and_login_json() {
+        assert!(validate_audio_prefix("audio/mpeg", b"ID3audio").is_ok());
+        assert!(validate_audio_prefix("text/html", b"<html>VIP login</html>").is_err());
+        assert!(validate_audio_prefix("audio/mpeg", br#"{"code":403}"#).is_err());
+        assert!(validate_audio_prefix("application/octet-stream", b"not audio").is_err());
+    }
+
+    #[test]
     fn new_song_payload_uses_requested_identity_not_the_reference_song() {
         let card = MusicCard::new(
             Provider::Qq,
@@ -607,7 +771,11 @@ mod tests {
         .unwrap();
         let app = native_appmsg(&card, "wx0123456789abcdef").unwrap();
         let parsed = parse_native(&format!("<msg>{app}</msg>")).unwrap().unwrap();
-        assert_eq!(parsed, card);
+        assert_eq!(parsed.title, card.title);
+        assert_eq!(parsed.artist, card.artist);
+        assert_eq!(parsed.audio_url, card.audio_url);
+        assert_eq!(parsed.image_url, card.image_url);
+        assert_eq!(parsed.page_url, card.page_url);
         assert!(!app.contains("STAY"));
         assert!(!app.contains("cdnthumbaeskey"));
         assert_eq!(

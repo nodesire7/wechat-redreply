@@ -3,6 +3,15 @@ $ErrorActionPreference='Stop'
 Push-Location $PSScriptRoot
 try {
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { throw 'Install Rust MSVC and Visual Studio C++ Build Tools before building.' }
+    if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) { throw 'Install Node.js and pnpm for frontend builds; the distributed EXE does not need them.' }
+    if (-not (Test-Path -LiteralPath 'design/gui-react/node_modules')) {
+        pnpm --dir design/gui-react install --frozen-lockfile
+        if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed' }
+    }
+    pnpm --dir design/gui-react test
+    if ($LASTEXITCODE -ne 0) { throw 'Frontend behavior tests failed' }
+    pnpm --dir design/gui-react build
+    if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
     if (-not $SkipTests) {
         cargo test --locked
         if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }

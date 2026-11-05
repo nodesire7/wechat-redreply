@@ -1,6 +1,19 @@
 //! Target preparation must not assume that a new account already has a chat
 //! open. No message is submitted until the selected target and input verify.
 use anyhow::{Context, Result};
+/// Only constructed at a boundary before any physical message submission.
+/// Queue handling also checks that no earlier part was already recorded.
+#[derive(Debug)]
+pub struct NotSubmitted(String);
+impl std::fmt::Display for NotSubmitted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl std::error::Error for NotSubmitted {}
+pub fn not_submitted(reason: impl std::fmt::Display) -> anyhow::Error {
+    NotSubmitted(reason.to_string()).into()
+}
 pub fn prepare<T>(
     initial_title: Result<String>,
     select: impl FnOnce() -> Result<T>,

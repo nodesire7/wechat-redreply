@@ -7,12 +7,20 @@ use std::sync::OnceLock;
 
 const P4209: &str = include_str!("../../assets/music-cgi-4.2.0.9.json");
 const P4212: &str = include_str!("../../assets/music-cgi-4.2.0.12.json");
+const VOICE4212: &str = include_str!("../../assets/voice-cgi-4.2.0.12.json");
+
+pub struct VoiceProfile {
+    functions: HashMap<String, (usize, [u8; 32])>,
+    pub task_vtable: usize,
+    pub task_size: usize,
+}
 
 pub struct Profile {
     pub version: String,
     functions: HashMap<String, (usize, [u8; 32])>,
     pub manager_anchor: usize,
     pub task_vtable: usize,
+    pub voice: Option<VoiceProfile>,
 }
 
 fn parse_hex(s: &str) -> Result<usize, String> {
@@ -52,7 +60,48 @@ pub fn load(version: &str) -> Result<Profile, String> {
         functions,
         manager_anchor: parse_hex(v["manager_anchor"].as_str().ok_or("管理器锚点缺失")?)?,
         task_vtable: parse_hex(v["task_vtable"].as_str().ok_or("任务虚表缺失")?)?,
+        voice: if version == "4.2.0.12" {
+            Some(load_voice()?)
+        } else {
+            None
+        },
     })
+}
+
+fn load_voice() -> Result<VoiceProfile, String> {
+    let v: Value = serde_json::from_str(VOICE4212).map_err(|_| "语音版本资料无效")?;
+    let mut functions = HashMap::new();
+    for (name, item) in v["functions"].as_object().ok_or("语音版本函数表无效")? {
+        functions.insert(
+            name.clone(),
+            (
+                parse_hex(item["rva"].as_str().ok_or("语音函数地址缺失")?)?,
+                hex32(item["first_32_bytes"].as_str().ok_or("语音函数校验缺失")?)?,
+            ),
+        );
+    }
+    Ok(VoiceProfile {
+        functions,
+        task_vtable: parse_hex(v["task_vtable"].as_str().ok_or("语音任务虚表缺失")?)?,
+        task_size: parse_hex(v["task_size"].as_str().ok_or("语音任务大小缺失")?)?,
+    })
+}
+
+pub fn voice(p: &Profile) -> Result<&VoiceProfile, String> {
+    p.voice
+        .as_ref()
+        .ok_or_else(|| "当前微信版本尚无已核对的原生语音任务".into())
+}
+
+pub fn voice_functions(p: &VoiceProfile) -> impl Iterator<Item = (&String, &(usize, [u8; 32]))> {
+    p.functions.iter()
+}
+
+pub fn voice_rva(p: &VoiceProfile, name: &str) -> Result<usize, String> {
+    p.functions
+        .get(name)
+        .map(|v| v.0)
+        .ok_or_else(|| format!("语音版本函数缺失：{name}"))
 }
 
 pub fn functions(p: &Profile) -> impl Iterator<Item = (&String, &(usize, [u8; 32]))> {

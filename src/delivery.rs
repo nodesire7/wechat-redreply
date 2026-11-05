@@ -22,9 +22,25 @@ pub enum Part {
     Text(String),
     Image(Vec<u8>),
     Music(crate::music::OutgoingMusic),
+    Voice(crate::voice::Note),
+}
+pub fn network(part: &Part) -> bool {
+    matches!(part, Part::Music(_) | Part::Voice(_))
+}
+fn deliver_network(
+    shared: &Shared,
+    job: &Job,
+    part: &Part,
+    index: usize,
+) -> Result<crate::actions::Tracked> {
+    match part {
+        Part::Music(music) => crate::music_backend::deliver(shared, job, music, index),
+        Part::Voice(note) => crate::voice::deliver(shared, job, note, index),
+        _ => bail!("不是原生网络消息"),
+    }
 }
 pub fn confirmation(parts: &[Part]) -> &'static str {
-    let n = parts.iter().filter(|p| matches!(p, Part::Music(_))).count();
+    let n = parts.iter().filter(|p| network(p)).count();
     if n == 0 {
         "database"
     } else if n == parts.len() {
@@ -150,6 +166,24 @@ pub fn prepare(message: &Value, auto_escape: bool, shared: &Shared) -> Result<Ve
                 validate_image(&bytes)?;
                 out.push(Part::Image(bytes));
             }
+            "record" => {
+                for note in crate::voice::prepare(d)? {
+                    out.push(Part::Voice(note));
+                }
+                let duration: u32 = out
+                    .iter()
+                    .filter_map(|part| {
+                        if let Part::Voice(note) = part {
+                            Some(note.duration_ms)
+                        } else {
+                            None
+                        }
+                    })
+                    .sum();
+                if duration > 600_000 {
+                    bail!("一次输出的原生语音总时长超过10分钟");
+                }
+            }
             "music" | "json" | "xml" => {
                 let request =
                     crate::music::parse_segment(&segment)?.context("该卡片不是受支持的音乐卡片")?;
@@ -168,6 +202,7 @@ pub fn prepare(message: &Value, auto_escape: bool, shared: &Shared) -> Result<Ve
         || !out.iter().any(|p| match p {
             Part::Image(_) => true,
             Part::Music(_) => true,
+            Part::Voice(_) => true,
             Part::Text(t) => !t.trim().is_empty(),
         })
     {
@@ -668,7 +703,7 @@ impl Automation {
             return self.recall(shared, *id);
         }
         if matches!(&job.operation, crate::actions::Operation::Send)
-            && job.parts.iter().all(|p| matches!(p, Part::Music(_)))
+            && job.parts.iter().all(network)
         {
             let current = crate::database::account_root(&c, &native::Process::bound(&binding)?)?;
             if shared
@@ -678,13 +713,10 @@ impl Automation {
                 .as_ref()
                 .is_none_or(|r| !crate::database::same_root(r, &current))
             {
-                bail!("微信登录账号已改变，未发送音乐")
+                bail!("微信登录账号已改变，未发送原生媒体")
             }
             for (index, part) in job.parts.iter().enumerate() {
-                let Part::Music(music) = part else {
-                    unreachable!()
-                };
-                let tracked = crate::music_backend::deliver(shared, job, music, index)?;
+                let tracked = deliver_network(shared, job, part, index)?;
                 crate::actions::append_sent(shared, job, &binding, tracked)?;
             }
             return Ok(());
@@ -692,6 +724,13 @@ impl Automation {
         let h = native::validate_window(&binding)?;
         native::offscreen(h)?;
         let _operation_guard = crate::popup::Guard::install(h, &shared.data)?;
+        if !unsafe { windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled(h) }.as_bool() {
+            let diagnostic = crate::diagnostics::collect(&c);
+            let _ = config::atomic(&shared.data.join("ui-readiness.json"), &diagnostic);
+            return Err(crate::ui_readiness::not_submitted(
+                "微信主窗口被对话框阻塞，尚未发送；请检查微信提示（例如存储空间不足），处理后重试。控件诊断已保存到 data/ui-readiness.json",
+            ));
+        }
         let root = self.root(h)?;
         if self
             .find(&root, UIA_AutomationIdPropertyId, "chat_input_field")
@@ -763,9 +802,9 @@ impl Automation {
         if let Err(error) = prepared {
             let diagnostic = crate::diagnostics::collect(&c);
             let _ = config::atomic(&shared.data.join("ui-readiness.json"), &diagnostic);
-            bail!(
+            return Err(crate::ui_readiness::not_submitted(format!(
                 "微信目标界面未就绪，未发送：{error:#}。诊断已保存到 data/ui-readiness.json；请双击 diagnose.cmd 核对窗口状态和客户端版本"
-            );
+            )));
         }
         for (index, part) in job.parts.iter().enumerate() {
             if Instant::now() >= job.deadline
@@ -785,8 +824,8 @@ impl Automation {
                 bail!("微信账号已改变；未发送");
             }
             drop(bound);
-            if let Part::Music(music) = part {
-                let tracked = crate::music_backend::deliver(shared, job, music, index)?;
+            if network(part) {
+                let tracked = deliver_network(shared, job, part, index)?;
                 crate::actions::append_sent(shared, job, &binding, tracked)?;
                 continue;
             }
@@ -796,23 +835,16 @@ impl Automation {
                 self.cancel_actions(h, &shared.data);
                 return Err(error);
             }
-            let tracked = self.track(shared, h, &job.name, part, checkpoint, sent_at)?;
-            {
-                let mut ledger = shared.ledger.lock().unwrap();
-                let record = ledger
-                    .sent
-                    .entry(job.id)
-                    .or_insert_with(|| crate::actions::Record {
-                        name: job.name.clone(),
-                        group: job.group,
-                        binding: binding.clone(),
-                        messages: vec![],
-                        nodes: None,
-                        recalled: false,
-                    });
-                record.messages.push(tracked);
-            }
-            crate::actions::save(shared)?;
+            let tracked = self.track(
+                shared,
+                h,
+                &job.name,
+                part,
+                checkpoint,
+                sent_at,
+                Some(job.id),
+            )?;
+            crate::actions::append_sent(shared, job, &binding, tracked)?;
         }
         Ok(())
     }
@@ -825,8 +857,8 @@ impl Automation {
         part: &Part,
         job: &Job,
     ) -> Result<()> {
-        if let Part::Music(_) = part {
-            bail!("音乐需要独立原生网络回执，未走界面中转");
+        if network(part) {
+            bail!("音乐/语音需要独立原生网络回执，未走界面中转");
         }
         unsafe {
             self.verify(h, target, group)?;
@@ -864,7 +896,9 @@ impl Automation {
                         self.attach_image(shared, h, raw)?;
                         inserted = true;
                     }
-                    Part::Music(_) => unreachable!("music uses native network delivery"),
+                    Part::Music(_) | Part::Voice(_) => {
+                        unreachable!("media uses native network delivery")
+                    }
                 }
                 self.verify(h, target, group)?;
                 let mut button = None;
@@ -884,14 +918,36 @@ impl Automation {
                 }
                 self.verify(h, target, group)?;
                 job.check_submission(shared)?;
+                let submitted_at = config::now();
+                if let Part::Image(raw) = part {
+                    crate::submitted_image::register(shared, job, target, raw)?;
+                }
                 invoked = true;
                 self.click_native(&button, h)?;
                 let (kind, text) = match part {
                     Part::Text(t) => (1, Some(t.as_str())),
                     Part::Image(_) => (3, None),
-                    Part::Music(_) => unreachable!("music uses native network delivery"),
+                    Part::Music(_) | Part::Voice(_) => {
+                        unreachable!("media uses native network delivery")
+                    }
                 };
-                if !shared.confirm(target, kind, text, before) {
+                let confirmed = if let Part::Image(raw) = part {
+                    let hash = crate::attachments::image_fingerprint(raw)?;
+                    crate::submitted_image::wait(
+                        shared,
+                        target,
+                        &hash,
+                        before,
+                        submitted_at,
+                        (target == job.name
+                            && matches!(&job.operation, crate::actions::Operation::Send))
+                        .then_some(job.id),
+                        (Instant::now() + Duration::from_secs(20)).min(job.deadline),
+                    )
+                } else {
+                    shared.confirm(target, kind, text, before)
+                };
+                if !confirmed {
                     bail!("未观察到新的微信服务器消息编号；发送可能已尝试，不会自动重发");
                 }
                 shared.log(&format!(
@@ -1028,6 +1084,7 @@ pub fn run(shared: Arc<Shared>, rx: crossbeam_channel::Receiver<Job>) {
                 Part::Text(text) => serde_json::json!({"type":"text","text":text}),
                 Part::Image(bytes) => serde_json::json!({"type":"image","bytes":bytes.len()}),
                 Part::Music(card) => serde_json::json!({"type":"music","title":card.card.title,"artist":card.card.artist,"delivery":"native_type3_cgi"}),
+                Part::Voice(note) => serde_json::json!({"type":"record","duration_ms":note.duration_ms,"delivery":"native_type34_cgi127"}),
             })
             .collect::<Vec<_>>();
         shared.event("outgoing",&serde_json::json!({"session":job.name,"group":job.group,"message_id":job.id,"content":content,"operation":match &job.operation {crate::actions::Operation::Send=>"发送",crate::actions::Operation::Forward(_)=>"合并转发",crate::actions::Operation::Recall(_)=>"撤回"}}));

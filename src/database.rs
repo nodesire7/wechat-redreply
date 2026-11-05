@@ -511,6 +511,7 @@ pub fn run(shared: Arc<Shared>) -> Result<()> {
     let startup = config::now() as i64;
     let start = Instant::now();
     let mut db = Database::new(&initial, &shared.data)?;
+    *shared.account_wxid.write().unwrap() = Some(db.wxid.clone());
     *shared.bound_root.write().unwrap() = Some(db.root.clone());
     let cursor_file = db.cache.join("cursors.json");
     let mut cursor: Cursors = config::load(&cursor_file)

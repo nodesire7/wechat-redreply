@@ -127,6 +127,12 @@ pub unsafe extern "system" fn MusicCgiHook(code: i32, w: WPARAM, l: LPARAM) -> L
                                         Some("send") => {
                                             crate::music_task::submit(base, &v).map(|_| None)
                                         }
+                                        Some("voice_construct") => {
+                                            crate::voice_task::construct_probe(base).map(Some)
+                                        }
+                                        Some("voice_chunk") => {
+                                            crate::voice_task::submit_chunk(base, &v).map(|_| None)
+                                        }
                                         Some("stats") => Ok(Some(crate::music_task::stats())),
                                         _ => Err("音乐通道操作未启用".into()),
                                     }

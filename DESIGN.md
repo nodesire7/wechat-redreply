@@ -1,235 +1,277 @@
 ---
 name: "微信 · 红色问答"
-description: "A calm native Windows control desk for account binding and RedReply connection."
+description: "A Chinese operational console with warm light/dark surfaces, red actions and green state accents."
 colors:
-  primary: "#4949DD"
-  ink: "#192029"
-  muted: "#596974"
-  sidebar: "#E6F2FB"
-  working-pane: "#FFFFFF"
-  line: "#D5DCE3"
-  selected-fill: "#D2E4F9"
-  selected-ink: "#2E399C"
-  hover-fill: "#E5EFF9"
-  pressed-fill: "#E7EEF4"
-  primary-pressed: "#3533BB"
-  disabled-fill: "#E5EAEE"
-  disabled-ink: "#74828D"
+  red: "#bd2b20"
+  red-soft: "#fff0ed"
+  green: "#08734f"
+  amber: "#92541b"
+  bg: "#f4f3ef"
+  panel: "#fff"
+  side: "#faf9f6"
+  ink: "#24201f"
+  muted: "#706761"
+  line: "#dedbd5"
+  hover: "#f1eee8"
+  log: "#f8f7f4"
+  focus: "#bd2b20"
+  dark-red: "#ff8f80"
+  dark-red-soft: "#3a211d"
+  dark-green: "#65d8a5"
+  dark-amber: "#e9b36f"
+  dark-bg: "#171414"
+  dark-panel: "#211c1b"
+  dark-side: "#1b1716"
+  dark-ink: "#f5f0ec"
+  dark-muted: "#bcaca6"
+  dark-line: "#493a36"
+  dark-hover: "#352a26"
+  dark-log: "#1a1615"
+  dark-focus: "#ff8f80"
+  dark-primary-ink: "#2d1511"
 typography:
   headline:
-    fontFamily: "Microsoft YaHei UI"
-    fontSize: "36px"
+    fontFamily: "'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif"
+    fontSize: "25px"
     fontWeight: 600
+    lineHeight: 1.3
   title:
-    fontFamily: "Microsoft YaHei UI"
-    fontSize: "30px"
+    fontFamily: "'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif"
+    fontSize: "19px"
     fontWeight: 600
+    lineHeight: 1.55
   body:
-    fontFamily: "Microsoft YaHei UI"
-    fontSize: "20px"
+    fontFamily: "'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif"
+    fontSize: "15px"
     fontWeight: 400
+    lineHeight: 1.55
+  label:
+    fontFamily: "'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif"
+    fontSize: "14px"
+    fontWeight: 400
+    lineHeight: 1.55
   secondary:
-    fontFamily: "Microsoft YaHei UI"
-    fontSize: "20px"
+    fontFamily: "'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif"
+    fontSize: "13px"
     fontWeight: 400
+    lineHeight: 1.55
+  log:
+    fontFamily: "'Cascadia Mono', Consolas, 'Microsoft YaHei UI', monospace"
+    fontSize: "13px"
+    fontWeight: 400
+    lineHeight: 1.8
 rounded:
-  field: "4px"
-  button: "5px"
-  account-strip: "7px"
+  control: "6px"
+  primary: "7px"
+  card: "12px"
+  pane-top: "16px"
 spacing:
-  pane-inset: "28px"
-  column-gap: "18px"
-  navigation-inset: "12px"
+  field-gap: "5px"
+  compact-gap: "12px"
+  form-column: "16px"
+  pane-inline: "24px"
 components:
   button-primary:
-    backgroundColor: "{colors.primary}"
-    textColor: "{colors.working-pane}"
-    typography: "{typography.body}"
-    rounded: "{rounded.button}"
-    height: "52px"
-  button-primary-active:
-    backgroundColor: "{colors.primary-pressed}"
-    textColor: "{colors.working-pane}"
-    rounded: "{rounded.button}"
+    backgroundColor: "{colors.red}"
+    textColor: "{colors.panel}"
+    rounded: "{rounded.primary}"
+    padding: "14px 24px"
+  button-primary-dark:
+    backgroundColor: "{colors.dark-red}"
+    textColor: "{colors.dark-primary-ink}"
+    rounded: "{rounded.primary}"
+    padding: "14px 24px"
   button-secondary:
-    backgroundColor: "{colors.working-pane}"
+    backgroundColor: "{colors.panel}"
     textColor: "{colors.ink}"
-    typography: "{typography.body}"
-    rounded: "{rounded.button}"
-    height: "52px"
-  button-secondary-hover:
-    backgroundColor: "{colors.hover-fill}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.button}"
-  button-secondary-active:
-    backgroundColor: "{colors.pressed-fill}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.button}"
-  button-disabled:
-    backgroundColor: "{colors.disabled-fill}"
-    textColor: "{colors.disabled-ink}"
-    rounded: "{rounded.button}"
+    rounded: "{rounded.control}"
+    padding: "7px 15px"
   text-field:
-    backgroundColor: "{colors.working-pane}"
+    backgroundColor: "{colors.panel}"
     textColor: "{colors.ink}"
-    typography: "{typography.body}"
-    rounded: "{rounded.field}"
-  navigation:
-    backgroundColor: "{colors.sidebar}"
-    textColor: "{colors.ink}"
-    typography: "{typography.body}"
-    rounded: "{rounded.button}"
-    height: "54px"
+    rounded: "{rounded.control}"
+    padding: "7px 10px"
   navigation-selected:
-    backgroundColor: "{colors.selected-fill}"
-    textColor: "{colors.selected-ink}"
-    rounded: "{rounded.button}"
-    height: "54px"
+    backgroundColor: "{colors.red-soft}"
+    textColor: "{colors.red}"
+    rounded: "{rounded.control}"
+    padding: "12px 16px"
+  filter-selected:
+    backgroundColor: "{colors.red-soft}"
+    textColor: "{colors.red}"
+    rounded: "{rounded.control}"
+    padding: "5px 16px"
   account-strip:
-    backgroundColor: "{colors.working-pane}"
+    backgroundColor: "{colors.panel}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.account-strip}"
+    rounded: "{rounded.card}"
+    padding: "13px 16px"
+  state-cell:
+    backgroundColor: "{colors.panel}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.card}"
+    padding: "8px 14px"
 ---
 
 # Design System: 微信 · 红色问答
 
 ## Overview
 
-**Creative North Star: "Motrix-style account-first control desk"**
+**Creative North Star: "Account-first operational control desk"**
 
-A pale-blue navigation rail and a spacious white inset working pane make Chinese account and connection settings easy to scan. The surface is now rendered by a local WebView2 page inside the Rust host, with the same Motrix-derived composition. Restrained indigo actions, charcoal text and thin line icons carry the pinned Motrix reference in one portable EXE. The surface works in Operate mode: account identity, connection identity and actual running state guide the next action.
+The implemented world is a warm, readable Chinese console: quiet neutral surfaces, red actions and selection, and green operational accents. Light and dark themes carry the same hierarchy. Stable navigation, real fields and a persistent action footer give a Windows operator a clear place to work. The name describes the delivered account-first composition already selected by the user; it does not introduce a new visual concept.
 
-This records the implemented system in `src/gui_web.rs` and `assets/gui`, using `PRODUCT.md` and the account surface brief for durable product constraints. The approved option B composition places the account strip above connection settings and opens on “账号与接入”. It favors saving as part of the requested action. Native Windows chrome, selection, dropdowns, keyboard behavior and editable text remain real controls. There is no browser runtime, shipping UI raster or decorative animation.
+Actual React Bits components add restrained light to useful boundaries: SpotlightCard encloses account binding, MagicBento displays three real operational states, StarBorder marks principal actions, and CountUp presents actual queue totals. These effects sit on flat working surfaces. They do not supply invented telemetry, progress or confirmation. This system records the current React/CSS artifact inside the Rust WebView2 host, not the older native fallback.
 
 **Key Characteristics:**
 
-- Pale-blue side navigation, white working pane and restrained indigo actions.
-- Chinese Microsoft YaHei UI typography with clear page and section hierarchy.
-- Geometric GDI line icons paired with real native text and controls.
-- Persistent operation footer and explicit bound, connected and stopped states.
-- Compact responsive desktop settings with action-integrated saving.
+- Warm light/dark neutrals with red actions and green operational accents.
+- Chinese UI typography with a compact, readable hierarchy.
+- Thin dividers, line SVG icons and gently curved controls.
+- Restrained React Bits effects attached to real tasks and state.
+- Stable navigation and footer around a compact, independently scrolling work area.
 
-**Implementation and acceptance are separate.** These source tokens describe the current native artifact; they do not certify pixel equivalence to the approved comp. Surface-specific review findings, comparison scores and acceptance belong in the account surface and finish-review artifacts, outside these durable tokens. The implemented native title bar, control geometry and flat white canvas must be disclosed when comparing to a comp. No HTML/CSS detector ran because it is inapplicable to this native UI. Review captures and the comp are internal inspection evidence, not shipped assets or examples for publication.
+Source authority is `design/gui-react/src/app.css`, `App.jsx` and their imported components. `PRODUCT.md` records runtime and verification limits; `.impeccable/surfaces/react-delivery.md` records this surface's task contract. Historical native indigo documentation and pixel-comparison state are not current React visual authority. These extracted tokens do not claim a newly approved React pixel comp or live WeChat verification.
 
 ## Colors
 
-The palette combines an icy blue rail, neutral white surfaces and a single blue-violet action accent. Frontmatter values are RGB hex, decoded from Win32 `COLORREF` BGR integers; screenshot sampling does not override source values.
+The palette pairs warm whites or brown-charcoal grounds with a red action family and a green operational family. Frontmatter preserves the CSS source values. Unsuffixed tokens are the light theme; `dark-` tokens replace the corresponding CSS custom properties under `data-theme=dark`.
 
 ### Primary
 
-- **Restrained Indigo** (`primary`): binding and “保存并应用”, with white labels and line icons. Pressing uses `primary-pressed`; hovering retains the primary fill.
+- **Operational Red** (`red`, `dark-red`): principal actions, selected navigation/filter text, caret and action/error emphasis.
+- **Soft Red** (`red-soft`, `dark-red-soft`): selected navigation and segmented filter grounds.
+- **Focus Red** (`focus`, `dark-focus`): visible focus outline for ordinary controls. The StarBorder component retains its own theme track outline.
+
+### Secondary
+
+- **Operational Green** (`green`, `dark-green`): positive status dots and success text, account/state icons, checkbox accent and the dark-theme React Bits glow.
+
+### Tertiary
+
+- **Pending Amber** (`amber`, `dark-amber`): pending and uncertain queue labels, distinct from confirmation and failure.
 
 ### Neutral
 
-- **Charcoal Ink** (`ink`): headings, field contents and standard action labels.
-- **Slate Secondary** (`muted`): explanations, binding/connection status and footer notice text.
-- **State Dot** (`#A89A8C`): two small painted circles beside the account and RedReply state labels, matching the B comp's neutral status marker.
-- **Icy Navigation Blue** (`sidebar`): the persistent left rail.
-- **Working White** (`working-pane`): main canvas, native text-field backgrounds and flat containers.
-- **Quiet Divider** (`line`): field frames, secondary button outlines, account strip and footer rule.
-- **Selection Blue / Selection Ink** (`selected-fill`, `selected-ink`): selected navigation and active log filters.
-- **Hover / Press / Disabled**: the corresponding state tokens apply to owner-drawn buttons; disabled content uses `disabled-ink` on `disabled-fill`.
+- **Warm Ground** (`bg`, `dark-bg`): outer application ground.
+- **Working Surface** (`panel`, `dark-panel`): main pane, inputs and operational cards.
+- **Quiet Rail** (`side`, `dark-side`): sidebar and custom title bar.
+- **Reading Ink / Secondary Ink** (`ink`, `muted` and dark equivalents): primary content and supporting explanations.
+- **Quiet Line / Hover Wash** (`line`, `hover` and dark equivalents): field/card boundaries, table rules and secondary hover states.
+- **Log Ground** (`log`, `dark-log`): selectable log-reading area.
+- **Dark Primary Ink** (`dark-primary-ink`): legible lettering on the dark theme's pale red primary actions.
 
-**The Action Accent Rule.** Use indigo for the implemented primary actions and selected navigation ink treatment; keep operational reading surfaces light and neutral.
+**The State Before Effect Rule.** Write the actual state in text; color and light may reinforce it but must not imply a send, connection or recall result.
 
-The sidecar's eight-step tonal ramps are synthesized preview-only metadata. They are not additional native palette tokens and must not be introduced into the application as established colors.
+The sidecar's eight-step tonal ramps are synthesized inspection metadata, not additional application colors. Component-local trail and border colors belong to their effects and do not establish new page accent families.
 
 ## Typography
 
-**Display Font:** Microsoft YaHei UI for application page headings.
-**Body Font:** Microsoft YaHei UI for fields, buttons, navigation and Chinese operational copy.
+**Body and heading family:** Microsoft YaHei UI, then Microsoft YaHei, system UI and sans-serif fallbacks.
+**Log family:** Cascadia Mono, Consolas, Microsoft YaHei UI and monospace fallbacks.
 
-**Character:** One Chinese sans family provides the entire application hierarchy. Native title-bar text belongs to the Windows non-client area and does not establish an application display face. No custom fallback stack, tracking or line-height token is implemented.
+**Character:** The interface is operational Chinese UI, with hierarchy established through size, weight and placement. There is no separate marketing display face or ornamental heading system.
 
 ### Hierarchy
 
-- **Headline** (600): page heading, using `typography.headline`.
-- **Title** (600): “微信账号” and “RedReply 连接”, using `typography.title`.
-- **Body** (400): ordinary labels, controls and navigation, using `typography.body`.
-- **Secondary** (400): supporting explanations and status, using `typography.secondary`; it has the same source size as body and differs through muted color and placement.
+- **Headline:** `typography.headline` for page names. The final compact override retains this size at narrow widths.
+- **Title:** `typography.title` for working sections; account-strip titles use (18px).
+- **Body:** `typography.body` for controls, navigation and ordinary content.
+- **Label:** `typography.label` for field labels; state-cell values share this size at (600) weight.
+- **Secondary:** `typography.secondary` for statuses, supporting copy, filters, table content and feedback. Compact hints and table metadata use (12px).
+- **Log:** `typography.log` for selectable, wrapping records.
+- **Queue totals:** (18px), (600) and tabular numerals. The count animation does not change the underlying meaning.
 
-The frontmatter sizes are logical pixel heights. A shared `FONT_SIZES = [20, 36, 30, 20]` drives both startup and `WM_DPICHANGED`; the native font height is the negative role height multiplied by DPI/96. Keep this relationship when adding controls. Font metrics and line wrapping remain native.
+Field hints have a (52ch) maximum; explanatory paragraphs commonly stop at (65ch), and the advanced runtime note at (75ch). Long names and errors wrap instead of becoming a second display style.
 
-**The One Chinese Voice Rule.** Use the same Chinese family for application labels and actions; establish hierarchy through the existing size, weight, color and placement roles.
+**The One Reading Voice Rule.** Keep interface labels in the established Chinese sans hierarchy; use monospace for logs rather than decoration.
 
 ## Layout
 
-The native window defaults to (1280 × 900 logical pixels), with a minimum tracked outer size of (1020 × 800). The comp comparison uses an alternate (1536 × 1024) capture; it is review evidence, not a second default. All client layout calculations divide physical bounds by DPI scale before placing scaled controls.
+The Rust host creates a (1160 × 780) logical-pixel window with a (960 × 680) minimum. The compact web shell uses a (44px) custom title bar above a persistent rail and working pane. The rail is (190px), becoming (166px) at widths up to (1150px). The pane has a (10px) outer top/right inset, (20px 24px 0) padding, and rounded top corners. Its content scrolls independently; the heading, feedback and footer remain in the flex shell. Feedback uses a (38px) minimum with (8px) vertical padding rather than reserving a tall notice band.
 
-For logical client width `w`, the rail is (192px) below `w = 1100`; at and above that threshold it is `min(round(w / 6), 264)`. The working pane begins at `rail + pane-inset` and retains the same inset at the right. A (16px) pale-blue band runs above the white pane, whose top corners use an (18px) rounded clip; this is the B composition and does not move native controls. Navigation rows start at (52px), advance by (62px), and have the tokenized row height, with the tokenized rail inset on both sides. Page order is account, scope, queue, logs, advanced.
+The account surface follows the selected B task order: account binding above connection settings. On wider desktops, the account identity and binding controls share one strip; at (1150px) and below they stack with a divider. The strip uses (13px 16px) padding, an (18px) gap that becomes (12px) at the compact breakpoint, and (10px) bottom margin. Three state cells follow at (58px) row height, (12px) gap and (12px) radius, with (8px 14px) content padding and (19px) space below. They show actual binding, database readiness and saved scope. The connection form uses three columns, a two-column token field and an optional WSS disclosure. Its current spacing is (12px) between rows and (16px) between columns; field labels use `field-gap`.
 
-The account/connection surface uses `v = clamp((clientHeight - 140) / 674, 0.90, 1.35)` for vertical placement. The account strip starts at `167 × v`; its height is `124 × v` with WSS collapsed and `96 × v` expanded, and a vertical divider separates identity from selection at 35.5% of the strip width. Its account identity stays to the left of window selection, refresh and binding. The selector keeps native ellipsis and a widened dropdown for long window labels. Only one selection/refresh/bind row is shown; the B comp's separate status dots are painted geometry in the rail-to-pane band.
+Scope uses two columns with a (24px) gap and proportions of (1:1.15): available contacts beside applied-name rows and immediate add/remove actions. The available list grows with content between a (120px) minimum and (310px) maximum; the applied list scrolls above (250px). Contact rows use a (45px) minimum and (7px 11px) padding. Bulk multiline editing is a collapsed disclosure with a five-row textarea. This replaces the former permanently exposed tall editor and empty list box.
 
-Connection fields use a three-column first row (listen IP, connection address, port), a two-column second row (robot ID and masked token), and a management-address row with its copy action. The tokenized column gap is shared by these rows and the paired whitelist editors. Nominal single-line field height is `36 × v`; optional WSS fields use `34 × v`. Opening WSS moves the section start from `336 × v` to `280 × v` and tightens row offsets so certificate and key fields fit above the persistent footer.
+Queue uses wrapping totals above filters and a horizontally scrollable table; rows use (12px) padding. Logs use a full reading area with (15px) padding below category/pause/copy controls. Advanced settings use paired fields with a (17px) gap, a separate friend-permissions section, and a collapsed compatibility table. All share the same heading/status feedback and footer.
 
-The footer rule sits (116px) above the client bottom, with a thin line that separates it from the connection area. Notice text sits at `h - 128`; operation buttons sit at `h - 95` with (52px) height. Start/stop remain left; reload/save remain right, with the primary save action at the B comp's 180px width. Sidebar running status stays near its lower edge. Scope, advanced, logs and queue share this shell and footer; they use their own native content placements rather than inheriting the account form's vertical formula.
+At widths up to (760px), the rail reduces to (64px), navigation labels hide while accessible button names remain, forms and scope stack, and binding controls wrap. Pane padding becomes (18px 16px 0). This is additional web reflow below the supported desktop host minimum, not a separate mobile product. The final source override keeps state rows at (58px). Footer buttons can wrap; the work area remains scrollable.
 
-**The Visible Operation Rule.** Keep state, the next available action and the persistent footer readable across the supported desktop sizes, including expanded WSS.
+**The Stable Working Frame Rule.** Preserve visible state, named navigation and available actions while the page body scrolls; use reflow before compressing Chinese controls beyond readability.
 
 ## Elevation & Depth
 
-Surfaces are flat. Tone separates the rail from the working pane; thin outlines distinguish fields and the account strip; a horizontal rule separates the footer. There are no custom shadows, gradients, floating cards, blur materials or motion tokens in this implementation. Windows may render its own non-client chrome outside this paint system.
+Working surfaces are flat at rest. Warm tonal layers and thin borders separate rail, pane, fields, tables and log area. The delivered account strip and state cells explicitly suppress their component libraries' default drop shadows. SpotlightCard and MagicBento add pointer/focus-driven radial light and edge glow; StarBorder draws a traveling edge light. These are the shipped effect vocabulary, not a general floating-card or blur-material system.
 
-**The Flat Working Surface Rule.** Preserve the implemented tonal layering and thin rules; do not add decorative elevation to settings or monitoring surfaces.
+**The Useful Boundary Rule.** Apply the implemented light treatments to their working account, state and action components; keep the form and reading surfaces quiet.
+
+StarBorder uses a (6-second) perimeter cycle, (1.2px) trail thickness, (0.4) glow and a hover/focus lap. CountUp uses (0.3-second) transitions for fetched queue totals. The account SpotlightCard uses (0.08) intensity and (0.6) border glow with flare and grain disabled. State cells enable spotlight and border glow, with tilt, intro animation and text auto-hide disabled. Reduced-motion support exists in CSS and the component implementations; still captures do not establish animation quality over time.
 
 ## Shapes
 
-The application uses restrained curved rectangles. Frontmatter radii describe the equivalent corner radii of GDI `RoundRect` ellipse diameters: fields (8px diameter), buttons (10px diameter), and the account strip (14px diameter), all scaled by DPI. GDI rounding and native control edges need not match CSS rasterization exactly. Field and secondary action borders use a one-device-pixel GDI pen. The account icon tile uses a (12px) ellipse diameter and a pale fill specified in the source, with an account line icon rather than an image avatar.
+Controls use compact curved rectangles with thin borders. Ordinary controls and segmented containers follow `rounded.control`; principal StarBorder actions use `rounded.primary`; account and state cards use `rounded.card`; only the pane's top corners use `rounded.pane-top`. The brand avatar is a small rounded image tile. No general pill or hard-offset-shadow style is established.
 
-Icons are geometric GDI strokes on a (24-unit) drawing grid. Navigation icons render at (21 logical pixels), action icons generally at (18), and the reveal-token icon at (20). Text remains native text; do not replace it with rasterized screen imagery or glyph icons.
+Application icons are inline SVG line geometry on a (24-unit) grid. The normal rendered size is (21px) with (1.7) stroke width, round caps and joins. Title-bar icons are (17px), account identity (30px), and state icons (21px). Their text labels or button accessible names carry meaning; decorative SVGs are hidden from assistive technology.
 
 ## Components
 
 ### Buttons
 
-Quiet native buttons communicate availability immediately. Owner drawing retains a Windows `BUTTON`, its Chinese text name and dialog keyboard behavior. Footer buttons use the documented height; binding, refresh, field-adjacent actions and filters use their observed compact heights. Shapes follow the button token.
+Primary actions are confident red fields with restrained StarBorder light. The actual `StarBorder` renders a button, retaining disabled and keyboard behavior. It is used for binding and saving; the account start action also uses the ordinary primary-button treatment. Principal StarBorder actions have (600) weight and (1.25) line-height. Ordinary buttons have a (38px) minimum height; compact table/filter controls reduce this where evidenced.
 
-Primary fill is used by “绑定账号” and “保存并应用”. Secondary buttons use working white, ink and a divider outline. Ordinary secondary hover and press use their state tokens; selected navigation and active filters use selection tokens. Disabled buttons use disabled tokens. Focus draws the native dotted focus rectangle inset (4 device pixels) from the owner-drawn bounds. State changes repaint immediately; no animation is implemented.
+Secondary buttons use the working surface, reading ink and a one-pixel line. Hover uses the theme hover wash; press translates the control by (1px). Primary hover darkens with `brightness(.92)`. Disabled buttons use (0.5) opacity. Ordinary focus uses a (2px) outline with (3px) offset. Preserve each component's visible focus, including StarBorder's theme-track outline.
 
 ### Inputs / Fields
 
-Native `EDIT` controls keep text selection, caret movement and dialog navigation. A GDI field frame supplies the thin outline and gentle corners; `field()` places the edit (9px) inside the nominal horizontal bounds and (4px) vertically. The frame extends around that edit; avoid treating the helper's offsets as a CSS padding contract.
+Actual HTML inputs, selects and textareas preserve editing, selection and browser keyboard behavior inside WebView2. Fields have a (38px) minimum height. Labels sit above them with `field-gap`; hints remain below. Textareas resize vertically and use (1.8) line-height. The token is masked by default and has an explicitly named reveal action. Saving disables editable fields. The music-card cell is static label and secondary copy in the existing two-column grid, explaining the current-song page, audio, QQ track identity and source authorization; it has no editable link-mode selector.
 
-The access token is masked by default and revealed only through its explicit eye button, whose native text name is “显示令牌”. Do not put real tokens into examples, previews or documentation. Account and contact selectors are native dropdown lists. Account rows are owner-drawn with ellipsis and native focused/selected state; the dropdown itself stays a native control.
+The token field groups its input and reveal button within one border. WSS stays in a native HTML disclosure. The form's wrappers do not replace functional labels with decoration.
 
 ### Navigation
 
-Five persistent left-rail buttons pair geometric icons with Chinese labels. The selected row has the selection fill and ink; neutral rows inherit the rail. Owner-drawn hover, press, disabled and focus states remain visible. `IsDialogMessageW` handles dialog navigation; hidden page controls are skipped. Keep meaningful native names and visible labels for keyboard and UI Automation use.
+Five left-rail buttons pair SVG icons and Chinese names. Selected navigation uses the theme soft red ground and red ink at (600) weight. Buttons use `aria-current=page`; the compact rail preserves their accessible names. The title bar has explicit theme, minimize, maximize/restore and close controls backed by the Rust host.
 
-### Account strip and connection settings
+### Filters / State Labels
 
-The stacked account strip is the chosen option B expression, with explicit binding and RedReply connection text above it. Binding validates the chosen logged-in window, saves that binding and collected settings, and reports the actual result. The connection area contains editable parameters and optional WSS disclosure. Its whitespace and outlines organize one task without a wizard or decorative metrics.
+Segmented filters have a thin rounded outer border, (3px) inset and (2px) gaps. Selected buttons use the same soft-red/red pairing as navigation with `aria-pressed`. Status text pairs a small (7px) neutral or green dot with a written state. Queue labels use green for confirmed, red for errors, amber for pending/uncertain and neutral ink for cancelled/recalled states. These are reading labels, not decorative success badges.
 
-### Persistent operation footer
+### Account Strip and State Cells
 
-The notice line reports actual action results and errors. Start validates the selected binding and saves before launching; “复制 OneBot 地址” saves before copying. “加入白名单” saves after adding the chosen contact. Binding saves itself. The general save action remains available for manual edits; page navigation retains unsaved edits, while reload/close can prompt about discarding them. Keep these action-integrated saves when extending the flow.
+SpotlightCard encloses the real account identity, selected window and refresh/bind controls; the persistent border and field labels remain readable without a hover. MagicBento uses custom content for three actual state cells. Its library demo charts, brands and generic content are not used in this console. Scope counts derive from the saved configuration, and contact membership distinguishes pending edits from applied scope.
 
-Copy actions operate only on an explicit user request; the copied OneBot URL may include a secret. During this design/review pass the local listener and bound robot WeChat remain stopped. Documentation and preview controls do not authorize starting, binding or messaging.
+### Applied Scope and Compatibility Detail
 
-### Advanced and monitoring surfaces
+Applied scope uses compact named rows with a direct remove action. Manual addition pairs one field with its save-integrated action; the bulk editor stays in an ordinary HTML disclosure. Addition and removal update the saved snapshot only after the Rust save succeeds. Empty states use content-sized explanations rather than a permanently tall blank editor.
 
-Advanced settings expose automatic self-chat identity as the default when the override is blank: resolve the exact bound account. Preserve offscreen operation, chat-only friend approval permissions and the maximum (120-second) explicit recall limit. These remain truthful operational settings rather than new visual motifs.
+Advanced compatibility detail is a real backend-fed table behind a named disclosure. It lists operation, actual behavior and status, then unsupported actions. Cells use (12px) text with (9px) padding; the table wraps long content. Capability and validation status remain written text, including the voice row's explicit supported-version boundary. Transport and recipient evidence belong in `PRODUCT.md`, rather than changing visual success rules.
 
-Logs use a native read-only multiline viewer and active filter buttons. Queue shares the viewer and displays actual durable queue states, including delivered, queued, failed and uncertain outcomes. It remains readable while stopped. An uncertain send must never acquire a successful label, color or statistic.
+### Queue and Logs
 
-The sidecar contains self-contained HTML/CSS **preview translations** for inspecting these native primitives. They are not shipping controls, executable product handlers, a browser runtime or pixel-equivalent native captures. Preview outlines approximate native focus; application focus remains Windows-drawn.
+Queue totals use CountUp only after a successful backend statistics snapshot; unavailable data renders an em dash and explicit error. The table retains real rows while cancellation/recall is pending and explains uncertain or failed results. No removal animation confirms an operation. Recent history is limited to (200) rows by the Rust endpoint.
+
+Logs use a selectable monospace preformatted area with wrapping, a line border and theme-specific log ground. Automatic refresh runs every (2 seconds); pausing still allows an explicit category fetch. Category and displayed data must agree before copying is enabled. A failed poll preserves the last data and reports that it is stale.
+
+### Persistent Footer and Feedback
+
+The footer has a line border, (69px) minimum height and (13px 0 16px) padding. Account start/stop sits to the left; save appears on editable pages. The feedback area reports pending edits, successful actions and errors through readable text and an `aria-live` region. Save/validation is integrated with dependent operations. Page navigation retains drafts; closing asks before discarding edits. Backend polling must not turn draft values into operational truth.
+
+The sidecar provides self-contained HTML/CSS previews of these primitives. Canvas/React motion and operational handlers are not recreated by a static preview. Examples use generic labels, explicitly marked style-preview content or neutral stopped/unbound state; they contain no private tokens, contacts or chat history.
 
 ## Do's and Don'ts
 
 ### Do:
 
-- **Do** retain the pale-blue rail, white working pane and restrained indigo actions.
-- **Do** use the existing Chinese typography roles and consistent DPI scaling.
-- **Do** keep native selection, dropdowns, keyboard focus and meaningful control names.
-- **Do** retain the persistent footer and honest binding, connection and listener states.
-- **Do** preserve one-click saving in binding, whitelist addition, address copy and Start.
-- **Do** distinguish queued, delivered, failed and uncertain outcomes.
+- **Do** keep the current warm light/dark red, white and green identity.
+- **Do** use the Chinese UI hierarchy, thin lines and inline SVG icons.
+- **Do** bind React Bits effects to the existing working components and real state.
+- **Do** preserve explicit unknown, stale, pending, failed and confirmed feedback.
+- **Do** keep keyboard names, visible focus and the scrolling work area usable in both themes.
 
 ### Don't:
 
-- **Don't** introduce shipping UI rasters, glyph icons or rasterized screen text.
-- **Don't** add unimplemented animations, decorative shadows or invented success metrics.
-- **Don't** publish tokens, personal account details or inspection screenshots as design assets.
-- **Don't** infer listener startup, account binding or messaging permission from a preview.
-- **Don't** treat synthesized ramps or HTML/CSS preview geometry as native source tokens.
-- **Don't** equate documented native tokens with accepted pixel equivalence to the comp.
+- **Don't** restore the historical indigo/native system as the current React design authority.
+- **Don't** add fabricated metrics, sample production rows or animation that implies sending or recall success.
+- **Don't** use unsaved scope edits as an applied operational state.
+- **Don't** spread demo charts, decorative progress or library default content into working forms.
+- **Don't** treat static GUI captures or this token record as proof of native playback or live WeChat delivery.

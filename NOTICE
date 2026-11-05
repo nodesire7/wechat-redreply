@@ -14,3 +14,11 @@ No WeChat client binary, account session, private configuration or chat database
 is included in this distribution. Version-specific native profiles contain
 identifiers and verification signatures, not proprietary client binaries.
 
+The React Bits components incorporated into this application's GUI retain
+their own MIT + Commons Clause License Condition v1.0, copyright 2026 David Haz.
+See licenses/ReactBits-LICENSE.txt and https://github.com/DavidHDev/react-bits.
+They are used as part of this application, not offered as a standalone component
+library. The project's Apache-2.0 license does not replace their license.
+React, React DOM, Motion and other frontend runtime dependency notices are
+included with the Rust dependency notices.
+

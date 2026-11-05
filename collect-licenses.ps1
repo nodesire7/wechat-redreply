@@ -23,6 +23,18 @@ try {
         [void]$builder.AppendLine("`n===== $($file.Name) =====")
         [void]$builder.AppendLine([System.IO.File]::ReadAllText($file.FullName))
     }
+    $frontend = pnpm --dir design/gui-react licenses list --prod --json | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw 'Frontend license collection failed' }
+    foreach ($group in $frontend.PSObject.Properties) {
+        foreach ($package in $group.Value) {
+            [void]$builder.AppendLine("`n===== Frontend: $($package.name) $($package.versions -join ', ') | $($package.license) =====")
+            foreach ($directory in ($package.paths | Sort-Object -Unique)) {
+                $licenseFiles = @(Get-ChildItem -LiteralPath $directory -File | Where-Object { $_.Name -match '^(LICENSE|LICENCE|COPYING|NOTICE)' })
+                if ($licenseFiles.Count -eq 0) { throw "Missing license text for $($package.name)" }
+                foreach ($file in $licenseFiles) { [void]$builder.AppendLine([System.IO.File]::ReadAllText($file.FullName)) }
+            }
+        }
+    }
     $destination=Join-Path $PSScriptRoot 'assets/THIRD_PARTY_LICENSES.txt'
     $content=$builder.ToString()
     if (-not (Test-Path -LiteralPath $destination) -or [System.IO.File]::ReadAllText($destination) -cne $content) {

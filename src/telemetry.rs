@@ -180,7 +180,11 @@ pub fn read(root: &Path, filter: i32) -> String {
                                     p["artist"].as_str().unwrap_or("")
                                 )
                             } else {
-                                format!("[图片：{} 字节]", p["bytes"])
+                                if p["type"] == "record" {
+                                    format!("[原生语音：{} 毫秒]", p["duration_ms"])
+                                } else {
+                                    format!("[图片：{} 字节]", p["bytes"])
+                                }
                             }
                         })
                         .collect::<Vec<_>>()
@@ -190,8 +194,8 @@ pub fn read(root: &Path, filter: i32) -> String {
                         "{}　耗时 {}ms{}",
                         if d["success"] == true {
                             match d["confirmation"].as_str() {
-                                Some("native_server") => "原生音乐已由微信服务端确认",
-                                Some("mixed") => "图文及原生音乐已由微信确认",
+                                Some("native_server") => "原生消息已由微信服务端确认",
+                                Some("mixed") => "图文及原生消息已由微信确认",
                                 Some("wechat") => "微信操作已确认",
                                 _ => "已由微信数据库确认成功",
                             }
@@ -259,7 +263,7 @@ mod tests {
         );
         let text = read(d.path(), 312);
         assert!(text.contains("Youngblood / Artist"));
-        assert!(text.contains("原生音乐已由微信服务端确认"));
+        assert!(text.contains("原生消息已由微信服务端确认"));
         assert!(!text.contains("数据库确认"));
         assert!(!text.contains("图片：null"));
     }

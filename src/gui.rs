@@ -1326,6 +1326,10 @@ pub(crate) fn state(c: &Config) -> Value {
             state["running"] = false.into();
         }
     }
+    if state["running"] != true {
+        state["ready"] = false.into();
+        state["connected"] = false.into();
+    }
     state
 }
 pub(crate) fn start(c: &Config) -> Result<()> {

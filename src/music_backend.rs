@@ -26,6 +26,64 @@ fn profile_for(path: &std::path::Path) -> Result<Value> {
     }
     bail!("当前微信版本不在音乐原生后端的已核对版本中")
 }
+#[cfg(test)]
+mod recall_tests {
+    use super::*;
+    fn row() -> crate::database::Message {
+        crate::database::Message {
+            local_id: 42,
+            server_id: 9_123_456_789_012_345_678,
+            sort_seq: 1,
+            create_time: 1_700_000_000,
+            kind: 3,
+            sender: "wxid_self".into(),
+            content: "image".into(),
+            shard: "test".into(),
+        }
+    }
+    #[test]
+    fn database_revoke_preserves_full_server_identity_and_does_not_forge_a_database_change() {
+        let image = row();
+        let receipt = database_recall_receipt("wxid_self", "12345@chatroom", &image).unwrap();
+        assert_eq!(receipt.server_id, "9123456789012345678");
+        assert_eq!(receipt.create_time, 1_700_000_000);
+        assert_eq!(receipt.to, "12345@chatroom");
+        assert!(!receipt.recalled);
+        assert_eq!(image.kind, 3);
+        let mut wrong = row();
+        wrong.sender = "wxid_other".into();
+        assert!(database_recall_receipt("wxid_self", "wxid_peer", &wrong).is_err());
+        wrong = row();
+        wrong.server_id = 0;
+        assert!(database_recall_receipt("wxid_self", "wxid_peer", &wrong).is_err());
+        wrong = row();
+        wrong.kind = 10000;
+        assert!(database_recall_receipt("wxid_self", "wxid_peer", &wrong).is_err());
+    }
+    #[test]
+    fn persisted_native_confirmation_survives_restart_and_must_match_the_server_id() {
+        let d = tempfile::tempdir().unwrap();
+        let c = Config::default(d.path().join("config.json"));
+        let (shared, _) = crate::service::Shared::new(c);
+        let receipt = database_recall_receipt("wxid_self", "wxid_peer", &row()).unwrap();
+        assert!(!recall_was_confirmed(&shared, &receipt).unwrap());
+        crate::config::atomic(
+            &recall_intent(&shared, &receipt),
+            &json!({"state":"unconfirmed","server_id":receipt.server_id}),
+        )
+        .unwrap();
+        assert!(!recall_was_confirmed(&shared, &receipt).unwrap());
+        crate::config::atomic(
+            &recall_intent(&shared, &receipt),
+            &json!({"state":"confirmed","server_id":receipt.server_id}),
+        )
+        .unwrap();
+        assert!(recall_was_confirmed(&shared, &receipt).unwrap());
+        let mut wrong = receipt.clone();
+        wrong.server_id = "1".into();
+        assert!(!recall_was_confirmed(&shared, &wrong).unwrap());
+    }
+}
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Receipt {
     pub from: String,
@@ -36,6 +94,54 @@ pub struct Receipt {
     pub server_id: String,
     #[serde(default)]
     pub recalled: bool,
+}
+/// Promote an already-confirmed own database message to the native revoke
+/// channel. The caller verifies the account, target and original output scope.
+/// This is a server receipt; it never rewrites a WeChat database row.
+pub fn database_recall_receipt(
+    from: &str,
+    to: &str,
+    row: &crate::database::Message,
+) -> Result<Receipt> {
+    if !from.starts_with("wxid_")
+        || row.sender != from
+        || to.is_empty()
+        || !matches!(row.kind, 1 | 3 | 49)
+        || row.server_id <= 0
+    {
+        bail!("原生撤回只接受当前账号已确认的文字、图片或卡片消息");
+    }
+    let local_id = u32::try_from(row.local_id)
+        .ok()
+        .filter(|v| *v > 0)
+        .context("撤回本地消息标识无效")?;
+    let create_time = u32::try_from(row.create_time)
+        .ok()
+        .filter(|v| *v > 0)
+        .context("撤回原消息时间无效")?;
+    Ok(Receipt {
+        from: from.into(),
+        to: to.into(),
+        client_id: format!("{to}_{create_time}_{local_id}"),
+        local_id,
+        create_time,
+        server_id: (row.server_id as u64).to_string(),
+        recalled: false,
+    })
+}
+fn recall_intent(shared: &crate::service::Shared, receipt: &Receipt) -> PathBuf {
+    shared.data.join("native-recall").join(format!(
+        "{}.json",
+        hex::encode(Sha256::digest(receipt.client_id.as_bytes()))
+    ))
+}
+pub fn recall_was_confirmed(shared: &crate::service::Shared, receipt: &Receipt) -> Result<bool> {
+    let path = recall_intent(shared, receipt);
+    if !path.exists() {
+        return Ok(false);
+    }
+    let value = crate::config::load(&path)?;
+    Ok(value["state"] == "confirmed" && value["server_id"] == receipt.server_id)
 }
 pub fn deliver(
     shared: &crate::service::Shared,
@@ -69,7 +175,10 @@ pub fn deliver(
     let sent_at = crate::config::now();
     let create_time = sent_at as u32;
     let client_id = format!("{to}_{create_time}_{local_id}");
-    let xml = crate::music::native_appmsg(&music.card, &music.app_id)?;
+    if !music.playback_verified {
+        crate::music::verify_playback(&music.card)?;
+    }
+    let xml = crate::music::native_appmsg_with_mode(&music.card, &music.app_id, music.link_mode)?;
     let mut receipt = Receipt {
         from,
         to,
@@ -138,7 +247,7 @@ pub fn recall(
         || sent_at > crate::config::now() + 1.
         || shared.stop.load(std::sync::atomic::Ordering::SeqCst)
     {
-        bail!("原生音乐撤回超过时限或正在停止，未提交")
+        bail!("原生消息撤回超过时限或正在停止，未提交")
     }
     let from = shared
         .staging
@@ -154,11 +263,11 @@ pub fn recall(
         .unwrap()
         .iter()
         .find(|p| p.name == name && p.group == group)
-        .context("音乐撤回目标身份未核验")?
+        .context("原生消息撤回目标身份未核验")?
         .wxid
         .clone();
     if from != receipt.from || target != receipt.to || !c.allows(name, group) {
-        bail!("音乐账号或目标发生变化，未撤回其他消息")
+        bail!("原生消息账号或目标发生变化，未撤回其他消息")
     }
     let binding = c.binding()?;
     let current = crate::database::account_root(&c, &native::Process::bound(&binding)?)?;
@@ -169,15 +278,53 @@ pub fn recall(
         .as_ref()
         .is_none_or(|r| !crate::database::same_root(r, &current))
     {
-        bail!("微信账号已改变，未撤回音乐")
+        bail!("微信账号已改变，未撤回原生消息")
     }
+    // Persist admission before touching the native manager. A timeout must not
+    // turn into another blind submission on a later RedLang delete or restart.
+    let _ = inspect(&c)?;
+    let age = crate::config::now() - sent_at;
+    if age >= limit || shared.stop.load(std::sync::atomic::Ordering::SeqCst) {
+        bail!("原生撤回准备后已到时限，未提交");
+    }
+    let intent = recall_intent(shared, receipt);
+    if intent.exists() {
+        let prior = crate::config::load(&intent)?;
+        if prior["state"] == "confirmed" && prior["server_id"] == receipt.server_id {
+            return Ok(());
+        }
+        bail!("原生撤回已经提交，结果尚待核对；未重复提交");
+    }
+    crate::config::atomic(
+        &intent,
+        &json!({"state":"submitted","server_id":receipt.server_id,"submitted_at":crate::config::now()}),
+    )?;
+    shared.log(&format!(
+        "原生撤回提交：服务器消息ID={}，发出后{age:.1}秒，时限剩余{:.1}秒",
+        receipt.server_id,
+        (limit - age).max(0.)
+    ));
     let result = rpc(
         &c,
         json!({"mode":"send","operation":"revoke","from":receipt.from,"to":receipt.to,"client_id":receipt.client_id,"local_id":receipt.local_id,"time":receipt.create_time,"server_id":receipt.server_id,"limit_seconds":limit as u64}),
-    )?;
+    );
+    let result = match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = crate::config::atomic(
+                &intent,
+                &json!({"state":"unconfirmed","server_id":receipt.server_id,"error":error.to_string()}),
+            );
+            return Err(error);
+        }
+    };
     if result["revoke_confirmed"] != true {
-        bail!("原生音乐撤回未确认，不重复执行")
+        bail!("原生消息撤回未确认，不重复执行")
     }
+    crate::config::atomic(
+        &intent,
+        &json!({"state":"confirmed","server_id":receipt.server_id,"confirmed_at":crate::config::now()}),
+    )?;
     let path = shared.data.join("native-music").join(format!(
         "{}.json",
         hex::encode(Sha256::digest(receipt.client_id.as_bytes()))
@@ -189,7 +336,7 @@ pub fn recall(
     value["receipt"] = serde_json::to_value(saved)?;
     crate::config::atomic(&path, &value)?;
     shared.log(&format!(
-        "微信原生音乐撤回已由服务端确认：{}",
+        "微信原生消息撤回已由服务端确认：{}",
         receipt.server_id
     ));
     Ok(())
