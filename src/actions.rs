@@ -1403,6 +1403,7 @@ impl Automation {
         }
     }
     pub(crate) fn recall(&self, shared: &Shared, id: u64) -> Result<()> {
+        let _activity = shared.begin_native();
         let mut record = ensure_recall(shared, id)?;
         if record.recalled {
             return Ok(());

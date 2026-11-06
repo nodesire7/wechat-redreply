@@ -279,7 +279,8 @@ pub fn poll(shared: &Shared, a: &Automation) -> Result<usize> {
         return Ok(0);
     }
     let binding = c.binding()?;
-    let h = native::validate_window(&binding)?;
+    let h = native::validate_chat_window(&binding)?;
+    let _activity = shared.begin_native();
     if !native::windows()
         .iter()
         .any(|w| w.binding.hwnd == binding.hwnd && w.offscreen)

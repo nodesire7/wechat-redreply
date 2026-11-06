@@ -21,6 +21,7 @@ use std::{
 pub struct Store {
     db: Connection,
 }
+const RECALL_CANDIDATES: &str = "SELECT id,recall_delay,recall_requested,recall_status FROM jobs WHERE (recall_requested=1 OR recall_delay IS NOT NULL) AND status NOT IN ('cancelled','failed') AND recall_status NOT IN ('recalled','cancelled','recall_failed') ORDER BY id LIMIT 5000";
 #[derive(Clone)]
 pub struct Entry {
     pub id: u64,
@@ -80,6 +81,11 @@ impl Store {
                 db.execute(sql, [])?;
             }
         }
+        // Recall metadata was appended after potentially multi-megabyte request
+        // bodies. An idle full-table scan walks overflow pages on every sender
+        // tick. This bounded candidate index excludes finished recalls and lets
+        // SQLite answer the exact polling query without reading media payloads.
+        db.execute_batch("CREATE INDEX IF NOT EXISTS jobs_recall_candidates ON jobs(id,recall_delay,recall_requested,recall_status,status) WHERE (recall_requested=1 OR recall_delay IS NOT NULL) AND status NOT IN ('cancelled','failed') AND recall_status NOT IN ('recalled','cancelled','recall_failed');")?;
         Ok(Self { db })
     }
 }
@@ -770,7 +776,7 @@ fn process_recall_with(
     mut recall: impl FnMut(u64) -> Result<()>,
 ) -> Result<bool> {
     let jobs = store(shared, |s| {
-        let mut q=s.db.prepare("SELECT id,recall_delay,recall_requested,recall_status FROM jobs WHERE (recall_requested=1 OR recall_delay IS NOT NULL) AND status NOT IN ('cancelled','failed') AND recall_status NOT IN ('recalled','cancelled','recall_failed') ORDER BY id LIMIT 5000")?;
+        let mut q = s.db.prepare(RECALL_CANDIDATES)?;
         Ok(q.query_map([], |r| {
             Ok((
                 r.get::<_, u64>(0)?,
@@ -1048,6 +1054,26 @@ pub fn gui_text(data: &Path, token: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn idle_recall_scan_uses_small_metadata_index_instead_of_historical_image_payloads() {
+        let d = tempfile::tempdir().unwrap();
+        let (_, shared) = setup(d.path());
+        store(&shared, |s| {
+            let mut query =
+                s.db.prepare(&format!("EXPLAIN QUERY PLAN {RECALL_CANDIDATES}"))?;
+            let plan = query
+                .query_map([], |r| r.get::<_, String>(3))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+                .join("; ");
+            assert!(
+                plan.contains("jobs_recall_candidates"),
+                "idle recall polling must not walk historical request payloads: {plan}"
+            );
+            Ok(())
+        })
+        .unwrap();
+        assert!(!process_recall_with(&shared, |_| panic!("there are no pending recalls")).unwrap());
+    }
     fn setup(path: &Path) -> (Config, Arc<Shared>) {
         let mut c = Config::default(path.join("config.json"));
         c.raw["whitelist"] = json!(["甲", "乙"]);

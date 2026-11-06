@@ -20,7 +20,7 @@ use tao::{
     platform::windows::WindowExtWindows,
     window::{ResizeDirection, WindowBuilder},
 };
-use wry::WebViewBuilder;
+use wry::{WebContext, WebViewBuilder, WebViewBuilderExtWindows};
 
 const HTML: &str = include_str!("../assets/gui/index.html");
 const CSS: &str = include_str!("../assets/gui/app.css");
@@ -55,6 +55,26 @@ pub fn run(config: Config) -> Result<()> {
         .collect();
     let listener = TcpListener::bind(("127.0.0.1", 0)).context("绑定本地界面端口")?;
     let port = listener.local_addr()?.port();
+    let software = unsafe {
+        windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+            windows::Win32::UI::WindowsAndMessaging::SM_REMOTESESSION,
+        ) != 0
+    };
+    // An RDP session may reset its GPU/compositor without terminating our
+    // message loop. Use software rendering for this GUI only, never OS-wide
+    // environment variables or flags on the user's WeChat process.
+    let mut context = WebContext::new(
+        software.then(|| config.path.parent().unwrap().join("data/webview-software")),
+    );
+    crate::lifecycle::note(
+        &config,
+        "gui_renderer",
+        if software {
+            "GUI 使用远程桌面软件渲染，避免依赖会话 GPU；仅影响本程序"
+        } else {
+            "GUI 使用默认渲染后端"
+        },
+    );
     let backend = Arc::new(Backend {
         config: Mutex::new(config),
         token,
@@ -93,11 +113,13 @@ pub fn run(config: Config) -> Result<()> {
             let _ = std::fs::write(dir.join("data/gui-web-url.txt"), &url);
         }
     }
-    let webview = WebViewBuilder::new()
+    let mut builder = WebViewBuilder::new_with_web_context(&mut context)
         .with_url(&url)
-        .with_background_color((230, 242, 251, 255))
-        .build(&window)
-        .context("创建 WebView2 控件")?;
+        .with_background_color((230, 242, 251, 255));
+    if software {
+        builder = builder.with_additional_browser_args("--disable-gpu");
+    }
+    let webview = builder.build(&window).context("创建 WebView2 控件")?;
     if no_activate {
         unsafe {
             let hwnd = windows::Win32::Foundation::HWND(window.hwnd() as _);
@@ -145,6 +167,7 @@ pub fn run(config: Config) -> Result<()> {
             _ => {}
         }
         let _ = &webview;
+        let _ = &context;
     });
 }
 
@@ -799,5 +822,28 @@ mod tests {
         let value = status_json(&backend).unwrap();
         assert!(value["outbox"].is_null());
         assert!(value["outbox_error"].as_str().unwrap().contains("不可用"));
+    }
+    #[test]
+    fn live_listener_with_destroyed_wechat_window_is_not_reported_ready() {
+        let d = tempfile::tempdir().unwrap();
+        let backend = backend(d.path());
+        let own = native::Process::open(std::process::id()).unwrap();
+        config::atomic(
+            &d.path().join("data/state.json"),
+            &json!({
+                "pid": std::process::id(), "created_at": own.creation().unwrap(),
+                "updated_at": config::now(), "running": true, "connected": true,
+                "ready": true, "error": ""
+            }),
+        )
+        .unwrap();
+        let status = status_json(&backend).unwrap();
+        assert_eq!(status["status"]["running"], true);
+        assert_eq!(status["binding"]["valid"], false);
+        assert_eq!(
+            status["status"]["ready"], false,
+            "a live listener and readable old databases do not prove an active WeChat login"
+        );
+        assert!(!status["status"]["error"].as_str().unwrap().is_empty());
     }
 }

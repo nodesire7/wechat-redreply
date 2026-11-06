@@ -12,7 +12,7 @@ use windows::{
         Graphics::Dwm::*,
         Storage::FileSystem::*,
         System::{Diagnostics::Debug::ReadProcessMemory, Memory::*, Threading::*},
-        UI::{HiDpi::*, WindowsAndMessaging::*},
+        UI::{HiDpi::*, Input::KeyboardAndMouse::IsWindowEnabled, WindowsAndMessaging::*},
     },
     core::{BOOL, PWSTR},
 };
@@ -401,6 +401,117 @@ pub fn validate_window(binding: &Binding) -> Result<HWND> {
         }
     }
     Ok(h)
+}
+/// A retained process and old database handles can outlive a WeChat login.
+/// Probe the exact bound chat window without focus changes or global input.
+pub fn validate_chat_window(binding: &Binding) -> Result<HWND> {
+    validate_chat_window_for(binding, false)
+}
+pub fn validate_chat_window_for(binding: &Binding, managed_modal: bool) -> Result<HWND> {
+    let h = validate_window(binding)?;
+    window_ready(h, managed_modal)?;
+    Ok(h)
+}
+fn window_ready(h: HWND, managed_modal: bool) -> Result<()> {
+    unsafe {
+        if !IsWindow(Some(h)).as_bool() {
+            bail!("绑定微信窗口已关闭，请登录原账号并重新绑定");
+        }
+        if !managed_modal && !IsWindowEnabled(h).as_bool() {
+            bail!("微信主窗口被弹窗阻塞，请处理微信提示后重试");
+        }
+        let mut rect = RECT::default();
+        GetWindowRect(h, &mut rect)?;
+        if rect.right - rect.left < 580 || rect.bottom - rect.top < 380 {
+            bail!("微信未处于已登录的聊天界面，请登录原账号并重新绑定");
+        }
+        let mut result = 0;
+        if SendMessageTimeoutW(
+            h,
+            WM_NULL,
+            WPARAM(0),
+            LPARAM(0),
+            SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT,
+            250,
+            Some(&mut result),
+        )
+        .0 == 0
+        {
+            bail!("微信窗口未响应，已暂停发送；不会自动激活或重启微信");
+        }
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod health_tests {
+    use super::*;
+    use windows::{Win32::UI::Input::KeyboardAndMouse::EnableWindow, core::w};
+    unsafe fn fixture() -> HWND {
+        unsafe {
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                w!("STATIC"),
+                w!("health fixture"),
+                WS_POPUP,
+                0,
+                0,
+                700,
+                500,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        }
+    }
+    #[test]
+    fn readiness_rejects_disabled_login_destroyed_and_unresponsive_windows_with_deadline() {
+        unsafe {
+            let h = fixture();
+            window_ready(h, false).unwrap();
+            let _ = EnableWindow(h, false);
+            assert!(
+                window_ready(h, false)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("弹窗")
+            );
+            window_ready(h, true).unwrap();
+            let _ = EnableWindow(h, true);
+            SetWindowPos(h, None, 0, 0, 296, 388, SWP_NOZORDER | SWP_NOACTIVATE).unwrap();
+            assert!(
+                window_ready(h, false)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("聊天界面")
+            );
+            DestroyWindow(h).unwrap();
+            assert!(
+                window_ready(h, true)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("已关闭")
+            );
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || unsafe {
+            let h = fixture();
+            tx.send(h.0 as isize).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(900));
+            DestroyWindow(h).unwrap();
+        });
+        let h = HWND(rx.recv().unwrap() as _);
+        let start = std::time::Instant::now();
+        assert!(
+            window_ready(h, true)
+                .unwrap_err()
+                .to_string()
+                .contains("未响应")
+        );
+        assert!(start.elapsed() < std::time::Duration::from_millis(700));
+        thread.join().unwrap();
+    }
 }
 pub fn restore_chat(binding: &Binding, data: &std::path::Path) -> Result<()> {
     unsafe {

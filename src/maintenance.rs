@@ -71,8 +71,9 @@ pub fn clean_web_settings(c: &Config, pid: u32, created: f64, close: bool) -> Re
         }
         let window = candidates[0];
         let foreground = GetForegroundWindow();
-        if foreground == window
-            || (!foreground.is_invalid() && GetAncestor(foreground, GA_ROOTOWNER) == window)
+        if close
+            && (foreground == window
+                || (!foreground.is_invalid() && GetAncestor(foreground, GA_ROOTOWNER) == window))
         {
             bail!("设置窗口正在前台使用，未关闭");
         }
