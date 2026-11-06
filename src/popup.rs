@@ -152,7 +152,11 @@ unsafe fn notify_existing(thread: u32, message: u32) {
         unsafe {
             let message = p.0 as u32;
             let style = GetWindowLongPtrW(h, GWL_STYLE) as u32;
-            if style & WS_POPUP.0 != 0 && style & WS_CHILD.0 == 0 {
+            let disarm = message == WM_APP + 0x5ef;
+            let subclassed = !GetPropW(h, w!("WechatRedReplyRust.OriginalPopupProc")).is_invalid();
+            if (disarm && subclassed)
+                || (!disarm && style & WS_POPUP.0 != 0 && style & WS_CHILD.0 == 0)
+            {
                 let mut out = 0;
                 let _ = SendMessageTimeoutW(
                     h,
@@ -271,5 +275,47 @@ pub fn probe(data: &std::path::Path) -> Result<serde_json::Value> {
         result["nested_guard_survives_owner_drop"] = alive.into();
         result["guard_releases_after_last_reference"] = released.into();
         Ok(result)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn releasing_guard_restores_new_nonpopup_windows_on_the_bound_thread() {
+        let d = tempfile::tempdir().unwrap();
+        unsafe {
+            let guard = Guard::thread(GetCurrentThreadId(), d.path()).unwrap();
+            let h = CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                w!("STATIC"),
+                w!("new login lifecycle fixture"),
+                WS_OVERLAPPEDWINDOW,
+                20,
+                20,
+                700,
+                500,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let protected = !GetPropW(h, w!("WechatRedReplyRust.OriginalPopupProc")).is_invalid();
+            drop(guard);
+            let released = GetPropW(h, w!("WechatRedReplyRust.OriginalPopupProc")).is_invalid();
+            MoveWindow(h, 20, 20, 700, 500, false).unwrap();
+            let mut rect = RECT::default();
+            GetWindowRect(h, &mut rect).unwrap();
+            DestroyWindow(h).unwrap();
+            assert!(
+                protected,
+                "fixture must exercise a window subclassed while the guard is active"
+            );
+            assert!(
+                released,
+                "new non-popup windows must not retain the offscreen subclass after logout"
+            );
+            assert_eq!(rect.left, 20);
+        }
     }
 }

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -87,6 +87,9 @@ struct Snapshot {
     wal: Option<Stamp>,
     salt: [u8; 8],
     frames: usize,
+    queries: VecDeque<(String, i64, Vec<Message>)>,
+    #[cfg(test)]
+    opens: usize,
 }
 impl Snapshot {
     fn update(&mut self) -> Result<PathBuf> {
@@ -108,6 +111,9 @@ impl Snapshot {
         if !rebuild && self.wal == wal {
             return Ok(self.target.clone());
         }
+        // Invalidate before any write, including a failed checkpoint update.
+        // This also refreshes late server IDs and native recall mutations.
+        self.queries.clear();
         if rebuild {
             let temp = self.target.with_extension("building");
             let mut src = readable(&self.source)?;
@@ -193,6 +199,10 @@ impl Snapshot {
         Ok(self.target.clone())
     }
     fn open(&mut self) -> Result<Connection> {
+        #[cfg(test)]
+        {
+            self.opens += 1;
+        }
         let path = self.update()?;
         let c = Connection::open_with_flags(
             path,
@@ -332,6 +342,9 @@ impl Database {
                     wal: None,
                     salt: [0; 8],
                     frames: 0,
+                    queries: VecDeque::new(),
+                    #[cfg(test)]
+                    opens: 0,
                 },
             );
         }
@@ -421,6 +434,15 @@ impl Database {
             if !rel.starts_with("message/") {
                 continue;
             }
+            file.update()?;
+            if let Some((_, _, rows)) = file
+                .queries
+                .iter()
+                .find(|(name, seq, _)| name == &table && *seq == since)
+            {
+                result.extend(rows.iter().cloned());
+                continue;
+            }
             let conn = file.open()?;
             let exists: i64 = conn.query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
@@ -428,6 +450,7 @@ impl Database {
                 |r| r.get(0),
             )?;
             if exists == 0 {
+                cache_messages(file, table.clone(), since, vec![]);
                 continue;
             }
             let mut names = HashMap::new();
@@ -466,13 +489,34 @@ impl Database {
                     shard: rel.replace('/', "__"),
                 })
             })?;
-            for row in rows {
-                result.push(row?);
-            }
+            let rows = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+            result.extend(rows.iter().cloned());
+            cache_messages(file, table.clone(), since, rows);
         }
         result.sort_by_key(|m| (m.sort_seq, m.shard.clone(), m.local_id));
         Ok(result)
     }
+}
+fn cache_messages(file: &mut Snapshot, table: String, since: i64, rows: Vec<Message>) {
+    fn bytes(rows: &[Message]) -> usize {
+        rows.iter()
+            .map(|m| {
+                std::mem::size_of::<Message>() + m.sender.len() + m.content.len() + m.shard.len()
+            })
+            .sum()
+    }
+    const LIMIT: usize = 4 * 1024 * 1024;
+    let size = bytes(&rows);
+    if size > LIMIT {
+        return;
+    }
+    while !file.queries.is_empty()
+        && (file.queries.len() >= 8
+            || file.queries.iter().map(|(_, _, r)| bytes(r)).sum::<usize>() + size > LIMIT)
+    {
+        file.queries.pop_front();
+    }
+    file.queries.push_back((table, since, rows));
 }
 fn bytes(v: ValueRef<'_>) -> Vec<u8> {
     match v {
@@ -510,6 +554,7 @@ pub fn run(shared: Arc<Shared>) -> Result<()> {
     let initial = shared.config.read().unwrap().clone();
     let startup = config::now() as i64;
     let start = Instant::now();
+    crate::native::validate_chat_window(&initial.binding()?)?;
     let mut db = Database::new(&initial, &shared.data)?;
     *shared.account_wxid.write().unwrap() = Some(db.wxid.clone());
     *shared.bound_root.write().unwrap() = Some(db.root.clone());
@@ -572,8 +617,26 @@ pub fn run(shared: Arc<Shared>) -> Result<()> {
     while !shared.stop.load(Ordering::Relaxed) {
         let c = shared.config.read().unwrap().clone();
         let started = Instant::now();
+        if let Err(e) = c.binding().and_then(|b| {
+            crate::native::validate_chat_window_for(
+                &b,
+                shared.native_activity.load(Ordering::SeqCst) > 0,
+            )
+        }) {
+            failures += 1;
+            shared.ready.store(false, Ordering::SeqCst);
+            shared.set_error(&format!("微信不可用：{e}"));
+            shared
+                .poll_us
+                .store(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+            std::thread::sleep(Duration::from_secs_f64(
+                (c.interval() * failures as f64).clamp(0.2, 2.),
+            ));
+            continue;
+        }
         let step = (|| -> Result<()> {
-            let bound = Process::bound(&c.binding()?)?;
+            let binding = c.binding()?;
+            let bound = Process::bound(&binding)?;
             if shared.generation.load(Ordering::SeqCst) != generation {
                 let mut revised = db.peers(&c)?;
                 if let Ok(staging) = db.staging(&c) {
@@ -888,6 +951,8 @@ mod tests {
             wal: None,
             salt: [0; 8],
             frames: 0,
+            queries: VecDeque::new(),
+            opens: 0,
         };
         snapshot.update().unwrap();
         assert_eq!(fs::metadata(&target).unwrap().len(), PAGE as u64);
@@ -909,5 +974,85 @@ mod tests {
         assert_eq!(fs::metadata(&target).unwrap().len(), PAGE as u64);
         assert_eq!(snapshot.frames, 0);
         assert_eq!(fs::read(&target).unwrap()[16], 7);
+    }
+
+    fn encrypted_fixture(plain: &Path, source: &Path, key: &[u8]) {
+        let bytes = fs::read(plain).unwrap();
+        assert_eq!(bytes[20] as usize, RESERVE);
+        let mut encrypted = Vec::with_capacity(bytes.len());
+        for (index, page) in bytes.chunks_exact(PAGE).enumerate() {
+            let start = if index == 0 { 16 } else { 0 };
+            let iv = [4u8; 16];
+            if start > 0 {
+                encrypted.extend([9u8; 16]);
+            }
+            encrypted.extend(
+                cbc::Encryptor::<aes::Aes256>::new_from_slices(key, &iv)
+                    .unwrap()
+                    .encrypt_padded_vec_mut::<NoPadding>(&page[start..PAGE - RESERVE]),
+            );
+            encrypted.extend(iv);
+            encrypted.extend([0u8; RESERVE - 16]);
+        }
+        fs::write(source, encrypted).unwrap();
+    }
+    #[test]
+    fn idle_message_poll_does_not_reopen_unchanged_database_and_observes_late_ack() {
+        let d = tempfile::tempdir().unwrap();
+        let plain = d.path().join("fixture.db");
+        let source = d.path().join("encrypted.db");
+        let c = Connection::open(&plain).unwrap();
+        c.execute_batch("PRAGMA page_size=4096;").unwrap();
+        let mut reserve = RESERVE as i32;
+        unsafe {
+            assert_eq!(
+                rusqlite::ffi::sqlite3_file_control(
+                    c.handle(),
+                    c"main".as_ptr(),
+                    rusqlite::ffi::SQLITE_FCNTL_RESERVE_BYTES,
+                    (&mut reserve as *mut i32).cast()
+                ),
+                0
+            );
+        }
+        let peer = "fixture-peer";
+        let table = format!("Msg_{}", hex::encode(Md5::digest(peer.as_bytes())));
+        c.execute_batch(&format!("VACUUM; CREATE TABLE Name2Id(user_name TEXT); INSERT INTO Name2Id VALUES('own'); CREATE TABLE {table}(local_id INTEGER, server_id INTEGER, sort_seq INTEGER, create_time INTEGER, local_type INTEGER, real_sender_id INTEGER, message_content TEXT, compress_content BLOB); INSERT INTO {table} VALUES(1,0,100,100,3,1,'image',NULL);")).unwrap();
+        encrypted_fixture(&plain, &source, &[8; 32]);
+        let rel = "message/message_0.db".to_owned();
+        let mut db = Database {
+            root: d.path().into(),
+            identity: "fixture".into(),
+            wxid: "own".into(),
+            cache: d.path().into(),
+            files: HashMap::from([(
+                rel.clone(),
+                Snapshot {
+                    source: source.clone(),
+                    target: d.path().join("snapshot.db"),
+                    key: vec![8; 32],
+                    base: None,
+                    wal: None,
+                    salt: [0; 8],
+                    frames: 0,
+                    queries: VecDeque::new(),
+                    opens: 0,
+                },
+            )]),
+        };
+        for _ in 0..100 {
+            let rows = db.messages(peer, 99).unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].server_id, 0);
+        }
+        assert_eq!(
+            db.files[&rel].opens, 1,
+            "idle polls must not reopen and rescan the same SQLite database"
+        );
+        c.execute(&format!("UPDATE {table} SET server_id=987654321"), [])
+            .unwrap();
+        encrypted_fixture(&plain, &source, &[8; 32]);
+        assert_eq!(db.messages(peer, 99).unwrap()[0].server_id, 987654321);
+        assert_eq!(db.files[&rel].opens, 2);
     }
 }

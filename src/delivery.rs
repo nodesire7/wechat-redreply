@@ -702,6 +702,8 @@ impl Automation {
         if let crate::actions::Operation::Recall(id) = &job.operation {
             return self.recall(shared, *id);
         }
+        native::validate_chat_window(&binding)?;
+        let _activity = shared.begin_native();
         if matches!(&job.operation, crate::actions::Operation::Send)
             && job.parts.iter().all(network)
         {
@@ -1000,14 +1002,25 @@ pub fn run(shared: Arc<Shared>, rx: crossbeam_channel::Receiver<Job>) {
         }
     };
     let mut friend_scan = Instant::now() - Duration::from_secs(10);
+    let mut friend_interval = Duration::from_secs(10);
     let mut idle_guard: Option<(isize, crate::popup::Guard)> = None;
     while !shared.stop.load(Ordering::Relaxed) {
         if !shared.ready.load(Ordering::SeqCst) {
+            // Do not leave a thread-wide focus/position hook attached after
+            // logout, modal blocking or a destroyed/replaced chat window.
+            idle_guard = None;
             std::thread::sleep(Duration::from_millis(100));
             continue;
         }
         let binding = shared.config.read().unwrap().binding();
         if let Ok(binding) = binding {
+            if let Err(e) = native::validate_chat_window(&binding) {
+                shared.ready.store(false, Ordering::SeqCst);
+                shared.set_error(&format!("微信不可用：{e}"));
+                idle_guard = None;
+                std::thread::sleep(Duration::from_millis(200));
+                continue;
+            }
             if idle_guard.as_ref().is_none_or(|(h, _)| *h != binding.hwnd) {
                 idle_guard = None;
                 match native::validate_window(&binding)
@@ -1054,10 +1067,15 @@ pub fn run(shared: Arc<Shared>, rx: crossbeam_channel::Receiver<Job>) {
                     Err(e) => shared.log(&format!("持久化队列处理错误：{e}")),
                 }
             }
-            if friend_scan.elapsed() >= Duration::from_secs(10) {
+            if friend_scan.elapsed() >= friend_interval {
                 friend_scan = Instant::now();
-                if let Err(e) = crate::friends::poll(&shared, &automation) {
-                    shared.log(&format!("好友申请处理：{e}"));
+                match crate::friends::poll(&shared, &automation) {
+                    Ok(n) if n > 0 => friend_interval = Duration::from_secs(10),
+                    Ok(_) => friend_interval = (friend_interval * 2).min(Duration::from_secs(60)),
+                    Err(e) => {
+                        friend_interval = (friend_interval * 2).min(Duration::from_secs(60));
+                        shared.log(&format!("好友申请处理：{e}"));
+                    }
                 }
             }
             let Ok(job) = rx.recv_timeout(Duration::from_millis(100)) else {

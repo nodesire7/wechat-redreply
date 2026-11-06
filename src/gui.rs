@@ -1329,6 +1329,11 @@ pub(crate) fn state(c: &Config) -> Value {
     if state["running"] != true {
         state["ready"] = false.into();
         state["connected"] = false.into();
+    } else if let Err(e) = c.binding().and_then(|b| {
+        native::validate_chat_window_for(&b, state["native_activity"].as_u64().unwrap_or(0) > 0)
+    }) {
+        state["ready"] = false.into();
+        state["error"] = format!("微信不可用：{e}").into();
     }
     state
 }

@@ -118,6 +118,12 @@ pub fn collect(c: &Config) -> Value {
     };
     report["checks"]["binding"] =
         json!({"valid":true,"process_creation_matches":true,"window_process_matches":true});
+    if let Err(e) = native::validate_chat_window(&binding) {
+        report["checks"]["chat_ready"] = json!({"ready":false,"reason":format!("{e}")});
+        // Never enter UI Automation against a known hung or blocked client.
+        return report;
+    }
+    report["checks"]["chat_ready"] = json!({"ready":true});
     report["client_modules"] = client_modules(binding.pid);
     unsafe {
         let mut r = RECT::default();

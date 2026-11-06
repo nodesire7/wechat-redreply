@@ -48,6 +48,8 @@
 
 ## 迁移与构建
 
+长期监听会核对绑定聊天窗口的存活、弹窗阻塞与限时响应；微信退出登录后暂停发送并提示重新绑定。未变化的消息查询使用有容量上限的缓存，撤回候选查询使用覆盖索引，避免空闲扫描历史媒体请求。好友申请空闲检查逐步放缓到60秒，普通消息轮询间隔不变。远程桌面中的 GUI 自动使用软件渲染和独立数据目录。此项降低对会话 GPU 的依赖，不能代替 Windows DWM 或显示驱动故障的修复。`--profile-idle` 可只读测量消息数据库、窗口和账号路径检查的耗时与逻辑读取量，不输出聊天内容，不更改游标。
+
 移动整个 EXE 所在目录可保留 `config.json` 和 `data`。只复制 EXE 到空目录会自动生成新配置；原来的 token 应通过配置导入保留。换机器或微信进程重启后需重新绑定。辅助 Rust DLL 内嵌 EXE，首次操作时释放到 `data/runtime`，无网络安装步骤。
 
 开发构建运行 `build.cmd`，需要 Rust MSVC、Visual Studio C++ Build Tools、Windows SDK、CMake、Node.js 22 和 pnpm 10（编译加密依赖）。脚本先构建并同步内嵌 React 页面、运行前端与 Rust 测试，再编译辅助 DLL、内嵌许可证、构建静态 CRT EXE，输出 `dist-build/WechatRedReply.exe`，与正在使用的 `dist` 分开。也可用 `-OutputDirectory` 指定构建目录。依赖锁定于 `Cargo.lock`。运行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\package.ps1` 完成测试、构建和干净打包，输出 ZIP、文件清单和 SHA256；使用明确的文件清单，配置、聊天记录和缓存不会入包。

@@ -38,6 +38,7 @@ pub struct Shared {
     pub peers: RwLock<Vec<Peer>>,
     pub members: Mutex<HashMap<u64, HashMap<u64, Value>>>,
     pub ready: AtomicBool,
+    pub native_activity: AtomicU64,
     pub stop: AtomicBool,
     pub generation: AtomicU64,
     pub received: AtomicU64,
@@ -60,7 +61,17 @@ pub struct Shared {
     pub logging: Mutex<()>,
     pub outbox: Mutex<Option<crate::outbox::Store>>,
 }
+pub struct NativeActivity<'a>(&'a Shared);
+impl Drop for NativeActivity<'_> {
+    fn drop(&mut self) {
+        self.0.native_activity.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 impl Shared {
+    pub fn begin_native(&self) -> NativeActivity<'_> {
+        self.native_activity.fetch_add(1, Ordering::SeqCst);
+        NativeActivity(self)
+    }
     pub fn new(c: Config) -> (Arc<Self>, crossbeam_channel::Receiver<crate::bridge::Job>) {
         let (tx, rx) = crossbeam_channel::bounded(128);
         let data = c.path.parent().unwrap().join("data");
@@ -76,6 +87,7 @@ impl Shared {
                 peers: RwLock::new(vec![]),
                 members: Mutex::new(HashMap::new()),
                 ready: AtomicBool::new(false),
+                native_activity: AtomicU64::new(0),
                 stop: AtomicBool::new(false),
                 generation: AtomicU64::new(0),
                 received: AtomicU64::new(0),
@@ -259,7 +271,7 @@ impl Shared {
         }
     }
     pub fn state(&self) -> Value {
-        json!({"pid":std::process::id(),"created_at":self.created_at,"updated_at":config::now(),"engine":"rust","version":env!("CARGO_PKG_VERSION"),"running":true,"connected":self.connected(),"ready":self.ready.load(Ordering::SeqCst),"backend":"database","metrics":{"poll_ms":self.poll_us.load(Ordering::Relaxed) as f64/1000.,"received":self.received.load(Ordering::Relaxed),"last_send_ms":self.last_send_us.load(Ordering::Relaxed) as f64/1000.},"outbox":crate::outbox::summary(self).unwrap_or_default(),"error":self.error.lock().unwrap().clone()})
+        json!({"pid":std::process::id(),"created_at":self.created_at,"updated_at":config::now(),"engine":"rust","version":env!("CARGO_PKG_VERSION"),"running":true,"connected":self.connected(),"ready":self.ready.load(Ordering::SeqCst),"native_activity":self.native_activity.load(Ordering::SeqCst),"backend":"database","metrics":{"poll_ms":self.poll_us.load(Ordering::Relaxed) as f64/1000.,"received":self.received.load(Ordering::Relaxed),"last_send_ms":self.last_send_us.load(Ordering::Relaxed) as f64/1000.},"outbox":crate::outbox::summary(self).unwrap_or_default(),"error":self.error.lock().unwrap().clone()})
     }
 }
 fn normalize(s: &str) -> String {
@@ -820,6 +832,58 @@ pub fn entry() -> Result<()> {
         );
         return Ok(());
     }
+    if args.iter().any(|s| s == "--profile-idle") {
+        // Explicit, read-only component timing. No hooks, UI actions, account
+        // identifiers or chat content are emitted; cursors are not touched.
+        use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessIoCounters};
+        fn reads() -> u64 {
+            let mut counters = windows::Win32::System::Threading::IO_COUNTERS::default();
+            unsafe {
+                let _ = GetProcessIoCounters(GetCurrentProcess(), &mut counters);
+            }
+            counters.ReadTransferCount
+        }
+        let binding = config.binding()?;
+        native::validate_chat_window(&binding)?;
+        let data = config
+            .path
+            .parent()
+            .unwrap()
+            .join("data")
+            .join(format!("idle-profile-{}", std::process::id()));
+        let mut db = crate::database::Database::new(&config, &data)?;
+        let peers = db.peers(&config)?;
+        let mut highs = vec![];
+        for p in &peers {
+            let rows = db.messages(&p.wxid, -1)?;
+            let high = rows.last().map_or(0, |m| m.sort_seq).saturating_sub(1);
+            db.messages(&p.wxid, high)?;
+            highs.push(high);
+        }
+        let mut results = vec![];
+        for component in ["database", "window", "account_root"] {
+            let start = Instant::now();
+            let before = reads();
+            for _ in 0..20 {
+                match component {
+                    "database" => {
+                        for (p, high) in peers.iter().zip(&highs) {
+                            db.messages(&p.wxid, *high)?;
+                        }
+                    }
+                    "window" => {
+                        native::validate_chat_window(&binding)?;
+                    }
+                    _ => {
+                        crate::database::account_root(&config, &native::Process::bound(&binding)?)?;
+                    }
+                }
+            }
+            results.push(json!({"component":component,"iterations":20,"milliseconds":start.elapsed().as_secs_f64()*1000.,"read_bytes":reads().saturating_sub(before)}));
+        }
+        println!("{}", json!({"components":results,"sessions":peers.len()}));
+        return Ok(());
+    }
     if args.iter().any(|s| s == "--service") {
         run(config)
     } else if std::env::args().any(|s| s == "--native-gui") {
@@ -907,6 +971,16 @@ fn run(config: Config) -> Result<()> {
         if last.elapsed() >= Duration::from_millis(500) {
             for watch in &mut exit_watches {
                 watch.poll(&shared);
+            }
+            let current = shared.config.read().unwrap().clone();
+            if let Err(e) = current.binding().and_then(|b| {
+                native::validate_chat_window_for(
+                    &b,
+                    shared.native_activity.load(Ordering::SeqCst) > 0,
+                )
+            }) {
+                shared.ready.store(false, Ordering::SeqCst);
+                shared.set_error(&format!("微信不可用：{e}"));
             }
             let _ = config::atomic(&shared.data.join("state.json"), &shared.state());
             last = Instant::now();
