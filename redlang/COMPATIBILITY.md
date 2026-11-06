@@ -18,6 +18,10 @@
 
 `auto_escape=true` 保留 CQ 字面内容。其他普通文本或文本段中的 CQ 码统一展开；转发还接受 JSON 字符串形式的节点数组和节点内容。原始 echo、显式 source/trigger/batch 字段保留。同步模式和持久化模式共用这一步转译。
 
+## 可选 AI 扩展
+
+`submit_ai_task`、`get_ai_task`、`cancel_ai_task`、`send_ai_task` 与 `clear_ai_context` 为本工具自定义扩展，不属于 OneBot11 标准。它们沿用原连接与鉴权，由 RedReply 显式调用；任务 ID 不冒充消息回执，送达确认后才写短期上下文。配置、可导入示例与异步契约见 [AI.md](AI.md)。默认关闭，不修改其他平台接入或已有插件。
+
 ## 撤回边界
 
 原版 RedReply 的 `输出流` 返回消息回执；`撤回` 会将指定回执转换为 `delete_msg`。原版电影插件把进度提示、搜索列表和图文详情分别登记撤回，游戏插件只撤回选择列表，正文可保留。适配器遵循这些回执边界。

@@ -42,15 +42,30 @@ if ($installedState.redreply.access_token -eq $first.redreply.access_token) { th
 $dummyData = Join-Path $installed 'data'
 New-Item -ItemType Directory -Path $dummyData | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $dummyData 'preserve.txt'), 'existing-data')
+$installedState | Add-Member -NotePropertyName ai -NotePropertyValue @{
+    enabled=$true; active_profile='fixture-local'; profiles=@(@{
+        id='fixture-local'; name='Migration fixture'; provider='custom';
+        base_url='http://127.0.0.1:11434/v1'; model='fixture-never-called'; allow_http=$true; require_key=$true
+    })
+} -Force
+$fixtureKey='package-verification-only-key'
+[System.IO.File]::WriteAllText($installedConfig,($installedState | ConvertTo-Json -Depth 12),[System.Text.UTF8Encoding]::new($false))
+$aiKeyPath=Join-Path $dummyData 'ai-keys.json'
+[System.IO.File]::WriteAllText($aiKeyPath,(@{'fixture-local'=$fixtureKey}|ConvertTo-Json),[System.Text.UTF8Encoding]::new($false))
+$beforeHash=(Get-FileHash -LiteralPath $installedConfig -Algorithm SHA256).Hash
+$beforeKeyHash=(Get-FileHash -LiteralPath $aiKeyPath -Algorithm SHA256).Hash
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $moved 'install.ps1') -Destination $installed -NoLaunch -NoShortcut
 if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed' }
 if ((Get-FileHash -LiteralPath $installedConfig -Algorithm SHA256).Hash -ne $beforeHash) { throw 'Upgrade replaced configuration' }
 if ([System.IO.File]::ReadAllText((Join-Path $dummyData 'preserve.txt')) -ne 'existing-data') { throw 'Upgrade replaced data' }
+if ((Get-FileHash -LiteralPath $aiKeyPath -Algorithm SHA256).Hash -ne $beforeKeyHash) { throw 'Upgrade replaced AI keys' }
+Invoke-CheckedExe (Join-Path $installed 'WechatRedReply.exe') '--validate'
 Invoke-CheckedExe (Join-Path $installed 'WechatRedReply.exe') '--licenses'
 Invoke-CheckedExe (Join-Path $installed 'WechatRedReply.exe') '--diagnose'
 $diagnostic = Get-Content -LiteralPath (Join-Path $installed 'wechat-diagnostics.json') -Raw
 if ($diagnostic.Contains($installedState.redreply.access_token) -or $diagnostic.Contains('access_token')) { throw 'Diagnostic contains a credential' }
+if ($diagnostic.Contains($fixtureKey)) { throw 'Diagnostic contains an AI credential' }
 if (-not (Test-Path -LiteralPath (Join-Path $installed 'THIRD_PARTY_LICENSES.txt'))) { throw 'Embedded licenses unavailable' }
-Write-Host 'PASS: archive hashes, clean state, first run, independent tokens, relocation, install, upgrade preserving data, embedded licenses.'
+Write-Host 'PASS: archive hashes, clean state, first run, independent tokens, relocation, install, upgrade preserving config/data/AI profiles/keys, credential-free diagnostics, embedded licenses.'
 Write-Host "Verification files: $sandbox"
 

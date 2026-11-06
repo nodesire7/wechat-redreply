@@ -1,9 +1,9 @@
-param([switch]$SkipBuild, [string]$OutputDirectory = 'release')
+param([switch]$SkipBuild, [string]$OutputDirectory = 'release', [string]$BinaryDirectory = 'dist-build')
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
 try {
     if (-not $SkipBuild) {
-        & "$PSScriptRoot\build.ps1"
+        & "$PSScriptRoot\build.ps1" -OutputDirectory $BinaryDirectory
         if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
     }
     $versionLine = Get-Content Cargo.toml | Where-Object { $_ -match '^version\s*=\s*"([^"]+)"' } | Select-Object -First 1
@@ -13,10 +13,11 @@ try {
     New-Item -ItemType Directory -Force -Path $output | Out-Null
     $name = "WechatRedReply-v$version-windows-x64"
     $stage = Join-Path $output $name
+    $binaryRoot = if ([System.IO.Path]::IsPathRooted($BinaryDirectory)) { $BinaryDirectory } else { Join-Path $PSScriptRoot $BinaryDirectory }
     if (Test-Path -LiteralPath $stage) { throw "Output already exists: $stage" }
     New-Item -ItemType Directory -Path $stage | Out-Null
     foreach ($file in @('WechatRedReply.exe','THIRD_PARTY_LICENSES.txt')) {
-        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "dist-build/$file") -Destination (Join-Path $stage $file)
+        Copy-Item -LiteralPath (Join-Path $binaryRoot $file) -Destination (Join-Path $stage $file)
     }
     foreach ($file in @('README.md','QUICKSTART.md','LICENSE','NOTICE','start.cmd','install.cmd','install.ps1','diagnose.cmd','diagnose.ps1')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $stage $file)

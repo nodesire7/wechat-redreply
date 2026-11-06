@@ -186,6 +186,7 @@ impl Config {
         if cert.is_empty() != key.is_empty() {
             bail!("WSS 需同时设置证书及私钥");
         }
+        crate::ai::validate(self)?;
         Ok(())
     }
     pub fn url(&self) -> String {

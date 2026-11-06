@@ -131,7 +131,9 @@ Actual React Bits components add restrained light to useful boundaries: Spotligh
 - Restrained React Bits effects attached to real tasks and state.
 - Stable navigation and footer around a compact, independently scrolling work area.
 
-Source authority is `design/gui-react/src/app.css`, `App.jsx` and their imported components. `PRODUCT.md` records runtime and verification limits; `.impeccable/surfaces/react-delivery.md` records this surface's task contract. Historical native indigo documentation and pixel-comparison state are not current React visual authority. These extracted tokens do not claim a newly approved React pixel comp or live WeChat verification.
+Source authority is `design/gui-react/src/app.css`, `App.jsx`, the AI extension's `AiPage.jsx` and `ai.css`, and their imported components. `PRODUCT.md` records runtime and verification limits; `.impeccable/surfaces/react-delivery.md` records this surface's task contract. Historical native indigo documentation and pixel-comparison state are not current React visual authority. These extracted tokens do not claim a newly approved React pixel comp or live WeChat verification.
+
+The AI extension carries the same B composition, palette, typography and component materials into a sixth destination. It changes no visual token and introduces no raster asset; the existing avatar remains unchanged. Its focused finish review returned `ship` for that surface and integration only. The captures in `.impeccable/review/ai` and QA record in `evidence/ai-gui-qa-round2/browser-qa.json` cover both themes at the normal and minimum host sizes, without whole-product reapproval, a pixel-match claim or live cloud/WeChat AI delivery evidence.
 
 ## Colors
 
@@ -196,6 +198,8 @@ Scope uses two columns with a (24px) gap and proportions of (1:1.15): available 
 
 Queue uses wrapping totals above filters and a horizontally scrollable table; rows use (12px) padding. Logs use a full reading area with (15px) padding below category/pause/copy controls. Advanced settings use paired fields with a (17px) gap, a separate friend-permissions section, and a collapsed compatibility table. All share the same heading/status feedback and footer.
 
+AI starts with an enable control and compact active-profile/add-profile toolbar. Named model and key fields use the existing paired form grid; the endpoint spans its width. Context, limits and request parameters stay behind a disclosure. The test question precedes real task and short-context sections in the scrolling body. Save and save/test actions are portalled into the existing persistent footer, keeping them available when the form or task history scrolls. The toolbar and limit grid stack at the existing narrow-web breakpoint; footer actions wrap at compact widths.
+
 At widths up to (760px), the rail reduces to (64px), navigation labels hide while accessible button names remain, forms and scope stack, and binding controls wrap. Pane padding becomes (18px 16px 0). This is additional web reflow below the supported desktop host minimum, not a separate mobile product. The final source override keeps state rows at (58px). Footer buttons can wrap; the work area remains scrollable.
 
 **The Stable Working Frame Rule.** Preserve visible state, named navigation and available actions while the page body scrolls; use reflow before compressing Chinese controls beyond readability.
@@ -218,7 +222,7 @@ Application icons are inline SVG line geometry on a (24-unit) grid. The normal r
 
 ### Buttons
 
-Primary actions are confident red fields with restrained StarBorder light. The actual `StarBorder` renders a button, retaining disabled and keyboard behavior. It is used for binding and saving; the account start action also uses the ordinary primary-button treatment. Principal StarBorder actions have (600) weight and (1.25) line-height. Ordinary buttons have a (38px) minimum height; compact table/filter controls reduce this where evidenced.
+Primary actions are confident red fields with restrained StarBorder light. The actual `StarBorder` renders a button, retaining disabled and keyboard behavior. It is used for binding and saving, including AI save; the account start action also uses the ordinary primary-button treatment. Principal StarBorder actions have (600) weight and (1.25) line-height. Ordinary buttons have a (38px) minimum height; compact table/filter controls reduce this where evidenced.
 
 Secondary buttons use the working surface, reading ink and a one-pixel line. Hover uses the theme hover wash; press translates the control by (1px). Primary hover darkens with `brightness(.92)`. Disabled buttons use (0.5) opacity. Ordinary focus uses a (2px) outline with (3px) offset. Preserve each component's visible focus, including StarBorder's theme-track outline.
 
@@ -228,9 +232,11 @@ Actual HTML inputs, selects and textareas preserve editing, selection and browse
 
 The token field groups its input and reveal button within one border. WSS stays in a native HTML disclosure. The form's wrappers do not replace functional labels with decoration.
 
+The AI API-key field is a separate write-only password input with no saved-key reveal action. A saved-key hint and placeholder communicate blank-to-retain behavior; deletion is an explicit pending change applied on save. Required-key and local/intranet HTTP options remain written checkbox controls beside the field. AI refreshes update task/context state without replacing unsaved fields, and page navigation retains the mounted form.
+
 ### Navigation
 
-Five left-rail buttons pair SVG icons and Chinese names. Selected navigation uses the theme soft red ground and red ink at (600) weight. Buttons use `aria-current=page`; the compact rail preserves their accessible names. The title bar has explicit theme, minimize, maximize/restore and close controls backed by the Rust host.
+Six left-rail buttons pair SVG icons and Chinese names: account/access, scope, AI models, queue, logs/conversations and advanced settings. Selected navigation uses the theme soft red ground and red ink at (600) weight. Buttons use `aria-current=page`; the compact rail preserves their accessible names. The title bar has explicit theme, minimize, maximize/restore and close controls backed by the Rust host.
 
 ### Filters / State Labels
 
@@ -252,9 +258,17 @@ Queue totals use CountUp only after a successful backend statistics snapshot; un
 
 Logs use a selectable monospace preformatted area with wrapping, a line border and theme-specific log ground. Automatic refresh runs every (2 seconds); pausing still allows an explicit category fetch. Category and displayed data must agree before copying is enabled. A failed poll preserves the last data and reports that it is stale.
 
+### AI Models, Tasks and Short Context
+
+The AI page extends the existing operational form rather than adding a chat-client visual system. Its enable text states that RedReply invokes generation explicitly. Current profile selection, provider presets and add/delete actions edit saved configuration; presets do not imply a successful connection. Shared context and request limits are distinguished from per-profile prompt and model parameters in the collapsed disclosure.
+
+The latest (100) actual tasks appear in a bordered reading table with written states, optional provider usage, task IDs and expandable wrapping results on the existing log ground. Model-test completion, generated text awaiting submission, sending-queue submission and confirmed delivery stay visibly distinct. Cancel is available only for eligible unsubmitted tasks; submitted work directs operators to the sending queue. Short-context rows identify conversation/member/profile, with per-member and confirmed all-context clearing. Empty states explain that model tests and unsent results do not create delivered context. No sample chat rows, fabricated usage or animated delivery confirmation is part of this surface.
+
 ### Persistent Footer and Feedback
 
 The footer has a line border, (69px) minimum height and (13px 0 16px) padding. Account start/stop sits to the left; save appears on editable pages. The feedback area reports pending edits, successful actions and errors through readable text and an `aria-live` region. Save/validation is integrated with dependent operations. Page navigation retains drafts; closing asks before discarding edits. Backend polling must not turn draft values into operational truth.
+
+On the AI page, the footer hosts the StarBorder save action, secondary save/test action and saved/unsaved status. Testing saves and validates first, then reports an asynchronous task ID rather than a connection-success assumption. The task result remains in the scrolling body. These footer controls share the existing busy/disabled feedback and theme treatment.
 
 The sidecar provides self-contained HTML/CSS previews of these primitives. Canvas/React motion and operational handlers are not recreated by a static preview. Examples use generic labels, explicitly marked style-preview content or neutral stopped/unbound state; they contain no private tokens, contacts or chat history.
 

@@ -1,0 +1,5 @@
+【定义命令@微信AI提交@【OB调用@【转文本@【对象@action@submit_ai_task@params@【对象@source_message_id@【消息ID】@user_id@【发送者ID】@group_id@【判空@【群ID】@0】@text@【参数@1】@profile_id@【参数@2】】】】】】
+【定义命令@微信AI查询@【OB调用@【转文本@【对象@action@get_ai_task@params@【对象@task_id@【参数@1】】】】】】
+【定义命令@微信AI发送@【OB调用@【转文本@【对象@action@send_ai_task@params@【对象@task_id@【参数@1】】】】】】
+【定义命令@微信AI取消@【OB调用@【转文本@【对象@action@cancel_ai_task@params@【对象@task_id@【参数@1】】】】】】
+【定义命令@微信AI清理上下文@【OB调用@【转文本@【对象@action@clear_ai_context@params@【对象@source_message_id@【消息ID】@user_id@【发送者ID】@group_id@【判空@【群ID】@0】】】】】】

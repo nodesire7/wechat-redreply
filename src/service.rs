@@ -60,6 +60,8 @@ pub struct Shared {
     pub created_at: f64,
     pub logging: Mutex<()>,
     pub outbox: Mutex<Option<crate::outbox::Store>>,
+    pub ai_running: AtomicBool,
+    pub ai_error: Mutex<String>,
 }
 pub struct NativeActivity<'a>(&'a Shared);
 impl Drop for NativeActivity<'_> {
@@ -111,6 +113,8 @@ impl Shared {
                     .unwrap_or(0.),
                 logging: Mutex::new(()),
                 outbox: Mutex::new(None),
+                ai_running: AtomicBool::new(false),
+                ai_error: Mutex::new(String::new()),
             }),
             rx,
         )
@@ -165,6 +169,10 @@ impl Shared {
             self.members.lock().unwrap().entry(gid).or_default().insert(uid,json!({"group_id":gid,"user_id":uid,"nickname":label,"card":"","role":"member","sex":"unknown","age":0,"area":"","join_time":0,"last_sent_time":row.create_time,"level":"0","unfriendly":false,"title":"","title_expire_time":0,"card_changeable":false}));
         }
         drop(c);
+        if let Err(e) = crate::ai::observe(self, peer, uid, row, id) {
+            // Failure of the optional AI store must not stop existing plugins.
+            self.log(&format!("登记 AI 来源失败（原消息继续推送）：{e}"));
+        }
         let delivered = {
             let guard = self.client.lock().unwrap();
             let Some(client) = guard.as_ref() else {
@@ -271,7 +279,7 @@ impl Shared {
         }
     }
     pub fn state(&self) -> Value {
-        json!({"pid":std::process::id(),"created_at":self.created_at,"updated_at":config::now(),"engine":"rust","version":env!("CARGO_PKG_VERSION"),"running":true,"connected":self.connected(),"ready":self.ready.load(Ordering::SeqCst),"native_activity":self.native_activity.load(Ordering::SeqCst),"backend":"database","metrics":{"poll_ms":self.poll_us.load(Ordering::Relaxed) as f64/1000.,"received":self.received.load(Ordering::Relaxed),"last_send_ms":self.last_send_us.load(Ordering::Relaxed) as f64/1000.},"outbox":crate::outbox::summary(self).unwrap_or_default(),"error":self.error.lock().unwrap().clone()})
+        json!({"pid":std::process::id(),"created_at":self.created_at,"updated_at":config::now(),"engine":"rust","version":env!("CARGO_PKG_VERSION"),"running":true,"connected":self.connected(),"ready":self.ready.load(Ordering::SeqCst),"native_activity":self.native_activity.load(Ordering::SeqCst),"backend":"database","ai":{"running":self.ai_running.load(Ordering::SeqCst),"error":self.ai_error.lock().unwrap().clone()},"metrics":{"poll_ms":self.poll_us.load(Ordering::Relaxed) as f64/1000.,"received":self.received.load(Ordering::Relaxed),"last_send_ms":self.last_send_us.load(Ordering::Relaxed) as f64/1000.},"outbox":crate::outbox::summary(self).unwrap_or_default(),"error":self.error.lock().unwrap().clone()})
     }
 }
 fn normalize(s: &str) -> String {
@@ -964,6 +972,15 @@ fn run(config: Config) -> Result<()> {
     });
     let sender = shared.clone();
     let sender_worker = std::thread::spawn(move || crate::delivery::run(sender, rx));
+    let ai = shared.clone();
+    let ai_worker = std::thread::spawn(move || {
+        ai.ai_running.store(true, Ordering::SeqCst);
+        if let Err(e) = crate::ai::run(ai.clone()) {
+            *ai.ai_error.lock().unwrap() = format!("AI 任务模块已停止：{e}");
+            ai.log(&format!("AI 任务模块已停止；微信监听不受影响：{e}"));
+        }
+        ai.ai_running.store(false, Ordering::SeqCst);
+    });
     shared.log("Rust 独立监听启动（无 Python 依赖）");
     let mut signature = config::load(&config.path)?;
     let mut last = Instant::now();
@@ -1015,6 +1032,7 @@ fn run(config: Config) -> Result<()> {
     let _ = sender_worker.join();
     let _ = db_worker.join();
     let _ = ws_worker.join();
+    let _ = ai_worker.join();
     shared.ready.store(false, Ordering::SeqCst);
     config::atomic(
         &shared.data.join("state.json"),

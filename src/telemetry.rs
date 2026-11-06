@@ -25,13 +25,24 @@ pub fn redact(value: &Value, token: &str) -> Value {
         Value::Object(map) => Value::Object(
             map.iter()
                 .map(|(key, value)| {
+                    let ai_prompt = map.get("action").and_then(Value::as_str)
+                        == Some("submit_ai_task")
+                        && key == "params";
+                    let ai_result = map.contains_key("task_id") && key == "text";
                     let secret = matches!(
                         key.to_lowercase().as_str(),
-                        "access_token" | "authorization" | "password" | "web_password" | "cookie"
+                        "access_token"
+                            | "authorization"
+                            | "password"
+                            | "web_password"
+                            | "cookie"
+                            | "api_key"
+                            | "api_keys"
+                            | "system_prompt"
                     );
                     (
                         key.clone(),
-                        if secret {
+                        if secret || ai_prompt || ai_result {
                             json!("<已隐藏>")
                         } else {
                             redact(value, token)

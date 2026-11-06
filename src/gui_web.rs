@@ -394,6 +394,27 @@ fn handle(backend: &Backend, mut stream: TcpStream) -> Result<()> {
         ("GET", "/api/capabilities") => Ok(crate::compat::capabilities()),
         ("GET", "/api/status") => status_json(backend),
         ("GET", "/api/jobs") => jobs_json(backend),
+        ("GET", "/api/ai") => ai_state(backend, true),
+        ("GET", "/api/ai/tasks") => ai_state(backend, false),
+        ("POST", "/api/ai/save") => ai_save(backend, &value),
+        ("POST", "/api/ai/probe") => {
+            let c = backend.config.lock().unwrap().clone();
+            crate::ai::probe(&c, &value)
+        }
+        ("POST", "/api/ai/cancel") => {
+            let c = backend.config.lock().unwrap().clone();
+            crate::ai::cancel(
+                &c.path.parent().unwrap().join("data"),
+                value["task_id"].as_str().context("缺少 task_id")?,
+            )
+        }
+        ("POST", "/api/ai/clear") => {
+            let c = backend.config.lock().unwrap().clone();
+            crate::ai::clear_context(
+                &c.path.parent().unwrap().join("data"),
+                value["session_id"].as_str(),
+            )
+        }
         ("POST", "/api/recall") => recall_job(backend, &value),
         ("GET", "/api/windows") => windows_json(backend),
         ("POST", "/api/save") => save(backend, &value),
@@ -477,6 +498,39 @@ fn jobs_json(backend: &Backend) -> Result<Value> {
     let data = c.path.parent().unwrap().join("data");
     let jobs = crate::outbox::gui_jobs(&data, 200, crate::actions::recall_limit(&c.raw))?;
     Ok(json!({"jobs": jobs}))
+}
+
+fn ai_state(backend: &Backend, include_config: bool) -> Result<Value> {
+    let c = backend.config.lock().unwrap().clone();
+    let mut result = crate::ai::list(
+        &c.path.parent().unwrap().join("data"),
+        crate::ai::config::Settings::read(&c.raw["ai"])?.context_minutes,
+    )?;
+    if include_config {
+        result["config"] = crate::ai::config::public(&c)?;
+    }
+    let status = crate::gui::state(&c);
+    result["listener_running"] = status["running"].clone();
+    result["worker"] = status["ai"].clone();
+    Ok(result)
+}
+fn ai_save(backend: &Backend, value: &Value) -> Result<Value> {
+    let mut guard = backend.config.lock().unwrap();
+    let mut c = guard.clone();
+    let (settings, keys) = crate::ai::config::prepare_save(&c, value)?;
+    c.raw["ai"] = serde_json::to_value(settings)?;
+    c.validate()?;
+    let data = c.path.parent().unwrap().join("data");
+    let old_keys = crate::ai::config::keys(&data)?;
+    config::atomic(&data.join("ai-keys.json"), &keys)?;
+    if let Err(e) = config::atomic(&c.path, &c.raw) {
+        let _ = config::atomic(&data.join("ai-keys.json"), &old_keys);
+        return Err(e);
+    }
+    *guard = c.clone();
+    Ok(
+        json!({"config":crate::ai::config::public(&c)?,"notice":"AI 设置已保存；运行中的监听自动应用。仅由 RedReply 显式调用，不自动接管普通消息。"}),
+    )
 }
 
 fn recall_job(backend: &Backend, value: &Value) -> Result<Value> {
@@ -761,6 +815,57 @@ mod tests {
             token: "test-only-session".into(),
             proxy: Mutex::new(None),
         })
+    }
+    #[test]
+    #[ignore = "manual isolated headless GUI capture; no listener or WeChat"]
+    fn ai_visual_harness() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("WECHAT_AI_VISUAL_DIR").expect("set isolated fixture directory"),
+        );
+        std::fs::create_dir_all(&root).unwrap();
+        let backend = backend(&root);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://127.0.0.1:{}/?token={}&page=ai",
+            listener.local_addr().unwrap().port(),
+            backend.token
+        );
+        std::fs::write(root.join("url.txt"), url).unwrap();
+        // Only a loopback HTTP bridge: no window, native hooks, listener or
+        // WeChat process is created or selected by this isolated harness.
+        serve(backend, listener);
+    }
+    #[test]
+    fn ai_http_save_masks_keys_and_preserves_existing_connection() {
+        let d = tempfile::tempdir().unwrap();
+        let backend = backend(d.path());
+        let before = backend.config.lock().unwrap().r().clone();
+        let mut settings = serde_json::to_value(crate::ai::config::Settings::default()).unwrap();
+        settings["profiles"] = json!([{"id":"local","name":"本地模型","provider":"custom","base_url":"https://model.example/v1","model":"fixture","api_key":"fixture-api-secret"}]);
+        settings["active_profile"] = json!("local");
+        settings["enabled"] = json!(true);
+        let body = settings.to_string();
+        let response = exchange(
+            backend.clone(),
+            &format!(
+                "POST /api/ai/save HTTP/1.1\r\nHost: localhost\r\nCookie: gui_token=test-only-session\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            ),
+        );
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(!response.contains("fixture-api-secret"));
+        assert_eq!(backend.config.lock().unwrap().r(), &before);
+        let state = exchange(
+            backend.clone(),
+            "GET /api/ai HTTP/1.1\r\nHost: localhost\r\nCookie: gui_token=test-only-session\r\n\r\n",
+        );
+        assert!(state.contains("has_key\":true"));
+        assert!(!state.contains("fixture-api-secret"));
+        let saved = config::load(&d.path().join("config.json")).unwrap();
+        assert!(!saved.to_string().contains("fixture-api-secret"));
+        let denied = exchange(backend, "GET /api/ai HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert!(denied.starts_with("HTTP/1.1 403"));
     }
     #[test]
     fn real_gui_http_cookie_refresh_and_errors_match_actual_results() {

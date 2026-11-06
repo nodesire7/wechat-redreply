@@ -1,5 +1,5 @@
-export const pages = ['account', 'scope', 'queue', 'logs', 'advanced'];
-export const pageNames = ['账号与接入', '接管范围', '发送队列', '日志与对话', '高级设置'];
+export const pages = ['account', 'scope', 'ai', 'queue', 'logs', 'advanced'];
+export const pageNames = ['账号与接入', '接管范围', 'AI 模型', '发送队列', '日志与对话', '高级设置'];
 export function jobState(job) {
   if (job.recall_status === 'recall_failed') return { label: '撤回未全部成功', tone: 'error' };
   if (job.recall_status === 'recalled') return { label: '已撤回', tone: 'neutral' };

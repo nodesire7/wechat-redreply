@@ -44,6 +44,7 @@ impl Store {
           CREATE TABLE IF NOT EXISTS jobs(id INTEGER PRIMARY KEY,batch_id TEXT NOT NULL,account TEXT NOT NULL,name TEXT NOT NULL,is_group INTEGER NOT NULL,request TEXT NOT NULL,status TEXT NOT NULL,enqueued REAL NOT NULL,started REAL,finished REAL,error TEXT NOT NULL DEFAULT '');
           CREATE INDEX IF NOT EXISTS jobs_pending ON jobs(status,id);
           CREATE INDEX IF NOT EXISTS jobs_batch ON jobs(batch_id,id);
+          CREATE TABLE IF NOT EXISTS ai_outputs(task_id TEXT PRIMARY KEY,message_id INTEGER NOT NULL,request_hash TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS friend_requests(request_key TEXT PRIMARY KEY,status TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',updated REAL NOT NULL);
           CREATE TABLE IF NOT EXISTS friend_control(name TEXT PRIMARY KEY,value TEXT NOT NULL);")?;
         let present: i64 = db.query_row(
@@ -215,6 +216,47 @@ fn auto_recall_delay(message: &Value) -> Option<f64> {
 }
 
 pub fn enqueue(shared: &Shared, c: &Config, request: &Value) -> Result<Value> {
+    enqueue_inner(shared, c, request, None)
+}
+pub fn enqueue_ai(shared: &Shared, c: &Config, request: &Value, task_id: &str) -> Result<Value> {
+    enqueue_inner(shared, c, request, Some(task_id))
+}
+/// Read-only handoff recovery for the optional AI store. The idempotency record
+/// is committed in the same transaction as the durable output, so a host crash
+/// between the outbox and AI commits cannot create an invisible second send.
+pub fn ai_links(data: &Path, tasks: &[String]) -> Result<Vec<(String, u64)>> {
+    let path = data.join("outbox.sqlite3");
+    if tasks.is_empty() || !path.exists() {
+        return Ok(vec![]);
+    }
+    let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    db.busy_timeout(Duration::from_secs(1))?;
+    let exists: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_outputs')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        return Ok(vec![]);
+    }
+    let mut q = db.prepare("SELECT task_id,message_id FROM ai_outputs WHERE task_id=?1")?;
+    let mut result = vec![];
+    for id in tasks {
+        if let Some(row) = q
+            .query_row([id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?
+        {
+            result.push(row);
+        }
+    }
+    Ok(result)
+}
+fn enqueue_inner(
+    shared: &Shared,
+    c: &Config,
+    request: &Value,
+    ai_task: Option<&str>,
+) -> Result<Value> {
     c.binding()?;
     let mut request = request.clone();
     crate::compat::rewrite(&mut request)?;
@@ -267,9 +309,35 @@ pub fn enqueue(shared: &Shared, c: &Config, request: &Value) -> Result<Value> {
     }
     let identity = account(shared)?;
     let origin = source(p)?;
-    let auto_delay = auto_recall_delay(&p["message"]);
+    // An AI answer cannot authorize its own recall by mentioning a delay.
+    // RedReply may explicitly call schedule_delete_msg on the returned receipt.
+    let auto_delay = if ai_task.is_some() {
+        None
+    } else {
+        auto_recall_delay(&p["message"])
+    };
     let receipt = store(shared, |s| {
         let tx = s.db.transaction()?;
+        let hash = hex::encode(Sha256::digest(raw.as_bytes()));
+        if let Some(task) = ai_task {
+            if let Some((id, old)) = tx
+                .query_row(
+                    "SELECT message_id,request_hash FROM ai_outputs WHERE task_id=?1",
+                    [task],
+                    |r| Ok((r.get::<_, u64>(0)?, r.get::<_, String>(1)?)),
+                )
+                .optional()?
+            {
+                if old != hash {
+                    bail!("此 AI 任务已提交不同的输出，未重复发送");
+                }
+                let status: String =
+                    tx.query_row("SELECT status FROM jobs WHERE id=?1", [id], |r| r.get(0))?;
+                return Ok(
+                    json!({"message_id":id,"delivery_status":status,"confirmed_sent":status=="sent","idempotent":true,"recall_scope":"output"}),
+                );
+            }
+        }
         let count: i64 = tx.query_row(
             "SELECT count(*) FROM jobs WHERE status IN ('queued','preparing','sending')",
             [],
@@ -294,6 +362,12 @@ pub fn enqueue(shared: &Shared, c: &Config, request: &Value) -> Result<Value> {
             .unwrap_or_else(|| output_batch(&identity, group, &name, id));
         tx.execute("INSERT OR IGNORE INTO batches(batch_id,account,name,is_group,source) VALUES(?1,?2,?3,?4,?5)",params![batch,identity,name,group,source])?;
         tx.execute("INSERT INTO jobs(id,batch_id,account,name,is_group,request,status,enqueued,recall_delay,recall_status) VALUES(?1,?2,?3,?4,?5,?6,'queued',?7,?8,?9)",params![id,batch,identity,name,group,raw,config::now(),auto_delay,if auto_delay.is_some(){"scheduled"}else{""}])?;
+        if let Some(task) = ai_task {
+            tx.execute(
+                "INSERT INTO ai_outputs(task_id,message_id,request_hash) VALUES(?1,?2,?3)",
+                params![task, id, hash],
+            )?;
+        }
         tx.commit()?;
         Ok(json!({
             "message_id":id,

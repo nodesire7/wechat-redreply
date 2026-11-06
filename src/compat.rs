@@ -106,12 +106,14 @@ pub fn rewrite(request: &mut Value) -> Result<()> {
 }
 pub fn capabilities() -> Value {
     json!({"protocol":"onebot11","recall_scope":"output","recall_limit_seconds":120,
+        "extensions":{"ai":{"actions":["submit_ai_task","get_ai_task","cancel_ai_task","send_ai_task","clear_ai_context"],"protocol":"openai_chat_completions","routing":"explicit_redreply_only","context":"account_chat_member_profile","delivery":"explicit_idempotent_outbox","automatic_fallback":false}},
         "actions":["send_msg","send_private_msg","send_group_msg","send_forward_msg","send_private_forward_msg","send_group_forward_msg","get_forward_msg","delete_msg","schedule_delete_msg","get_login_info","get_friend_list","get_group_list","get_group_info","get_group_member_info","get_group_member_list","get_stranger_info","get_status","get_version_info","get_delivery_status"],
         "segments":{"text":"native","image":"native_separate_message","music":"native_type3_qq","record":"native_voice_4.2.0.12","node":"native_type19","at":"readable_text","reply":"trace_only"},
         "voice":{"native_profiles":["4.2.0.12"],"note_limit_seconds":60,"source_limit_seconds":600,"long_source":"split_into_native_notes_same_output","formats":["SILK","MP3","WAV","FLAC","AAC/M4A","Ogg/Vorbis"]},
         "unsupported_segments":["video","file","face","location","share","contact","poke","tts","non_music_json_xml","music_or_voice_forward_node"],
         "unsupported_actions":["get_msg","get_record","get_image","set_group_ban","set_group_kick","set_group_admin","set_essence_msg","set_msg_emoji_like","send_like","upload_group_file","set_friend_add_request","set_group_add_request"],
         "mappings":[
+            {"operation":"AI 扩展动作（非 OneBot11 标准）","result":"RedReply 显式提交/查询/取消；生成后独立提交发送，确认送达才记上下文","state":"可选启用"},
             {"operation":"文字 / 图片","result":"微信独立消息，同一次输出统一撤回","state":"支持"},
             {"operation":"音乐卡 music / QQ音乐JSON","result":"本次音频的原生音乐卡，直链发送前检查","state":"支持"},
             {"operation":"语音 record","result":"微信原生语音，单条60秒；长音频自动分段。目前4.2.0.12","state":"支持（指定版本）"},

@@ -242,7 +242,7 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             result=input.next()=>{match result{
                 Some(Ok(tungstenite::Message::Text(text)))=>{let request:Value=match serde_json::from_str(&text){Ok(v)=>v,Err(_)=>{let _=tx.try_send(failure(Value::Null,1400,"Invalid JSON"));continue;}};
                     let action=request["action"].as_str().unwrap_or("");
-                    let native=action.starts_with("send_") || action=="delete_msg";
+                    let native=(action.starts_with("send_") && action!="send_ai_task") || action=="delete_msg";
                     let pending=if native {native_pending.clone()} else {control_pending.clone()};
                     let permit=match pending.try_acquire_owned(){Ok(p)=>p,Err(_)=>{
                         let result=failure(request["echo"].clone(),1408,"Bounded request backlog is full; request was not executed");
@@ -298,6 +298,13 @@ fn api_until(
     let result = (|| -> Result<Value> {
         translated?;
         match action {
+            "submit_ai_task" | "get_ai_task" | "cancel_ai_task" | "send_ai_task"
+            | "clear_ai_context" => {
+                if !shared.owner(owner) {
+                    bail!("Connection closed");
+                }
+                crate::ai::api(shared, action, params)
+            }
             "inject_message" => {
                 let text = params["text"].as_str().context("Missing text")?.to_owned();
                 let name = params["name"].as_str().unwrap_or("阿飞").to_owned();

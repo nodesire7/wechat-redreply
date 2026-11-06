@@ -1,0 +1,22 @@
+[
+  {
+    "name": "微信AI显式问答",
+    "description": "仅连接本工具的微信生效；AI 空格前缀触发。模型生成与发送分开，不接管其他关键词。",
+    "content": {
+      "关键词": "AI ",
+      "触发方式": "群、私聊触发",
+      "匹配方式": "前缀匹配",
+      "code": "【定义变量@微信AI能力@【OB调用@{\"action\":\"get_capabilities\",\"params\":{}}】】【判断@【取元素@【变量@微信AI能力】@data@extensions@ai@routing】@explicit_redreply_only@【返回】@】【定义命令@微信AI提交@【OB调用@【转文本@【对象@action@submit_ai_task@params@【对象@source_message_id@【消息ID】@user_id@【发送者ID】@group_id@【判空@【群ID】@0】@text@【参数@1】@profile_id@【参数@2】】】】】】【定义命令@微信AI查询@【OB调用@【转文本@【对象@action@get_ai_task@params@【对象@task_id@【参数@1】】】】】】【定义命令@微信AI发送@【OB调用@【转文本@【对象@action@send_ai_task@params@【对象@task_id@【参数@1】】】】】】【定义命令@微信AI取消@【OB调用@【转文本@【对象@action@cancel_ai_task@params@【对象@task_id@【参数@1】】】】】】【定义命令@微信AI清理上下文@【OB调用@【转文本@【对象@action@clear_ai_context@params@【对象@source_message_id@【消息ID】@user_id@【发送者ID】@group_id@【判空@【群ID】@0】】】】】】【定义变量@微信AI提交结果@【微信AI提交@【子关键词】】】【判断@【取元素@【变量@微信AI提交结果】@status】@ok@【输出流@AI请求未接受：【CQ转义@【取元素@【变量@微信AI提交结果】@message】】】【返回】@】【定义变量@微信AI任务ID@【取元素@【变量@微信AI提交结果】@data@task_id】】【定义变量@微信AI已处理@0】【循环@95@【定义变量@微信AI结果@【微信AI查询@【变量@微信AI任务ID】】】【判断@【取元素@【变量@微信AI结果】@status】@ok@【输出流@AI任务查询失败，请在GUI查看。】【赋值变量@微信AI已处理@1】【跳出】@】【定义变量@微信AI状态@【取元素@【变量@微信AI结果】@data@status】】【判断@【变量@微信AI状态】@generated@@【定义变量@微信AI发送结果@【微信AI发送@【变量@微信AI任务ID】】】【判断@【取元素@【变量@微信AI发送结果】@status】@ok@【输出流@AI提交发送失败：【CQ转义@【取元素@【变量@微信AI发送结果】@message】】】@】【赋值变量@微信AI已处理@1】【跳出】】【判断@【变量@微信AI状态】@awaiting_delivery@@【赋值变量@微信AI已处理@1】【跳出】】【判断@【变量@微信AI状态】@delivered@@【赋值变量@微信AI已处理@1】【跳出】】【判断@【变量@微信AI状态】@queued@【判断@【变量@微信AI状态】@running@【输出流@AI任务已结束：【CQ转义@【变量@微信AI状态】】 【CQ转义@【取元素@【变量@微信AI结果】@data@error】】】【赋值变量@微信AI已处理@1】【跳出】@】@】【延时@2000】】【判断@【变量@微信AI已处理】@1@【屏蔽@【微信AI取消@【变量@微信AI任务ID】】】【输出流@AI任务等待超时，已请求取消；请在GUI核对状态。】@】"
+    }
+  },
+  {
+    "name": "微信AI清理上下文",
+    "description": "只清理发起成员在当前会话的短期上下文，不撤回已发微信。",
+    "content": {
+      "关键词": "AI清空上下文",
+      "触发方式": "群、私聊触发",
+      "匹配方式": "完全匹配",
+      "code": "【定义变量@微信AI能力@【OB调用@{\"action\":\"get_capabilities\",\"params\":{}}】】【判断@【取元素@【变量@微信AI能力】@data@extensions@ai@routing】@explicit_redreply_only@【返回】@】【定义命令@微信AI提交@【OB调用@【转文本@【对象@action@submit_ai_task@params@【对象@source_message_id@【消息ID】@user_id@【发送者ID】@group_id@【判空@【群ID】@0】@text@【参数@1】@profile_id@【参数@2】】】】】】【定义命令@微信AI查询@【OB调用@【转文本@【对象@action@get_ai_task@params@【对象@task_id@【参数@1】】】】】】【定义命令@微信AI发送@【OB调用@【转文本@【对象@action@send_ai_task@params@【对象@task_id@【参数@1】】】】】】【定义命令@微信AI取消@【OB调用@【转文本@【对象@action@cancel_ai_task@params@【对象@task_id@【参数@1】】】】】】【定义命令@微信AI清理上下文@【OB调用@【转文本@【对象@action@clear_ai_context@params@【对象@source_message_id@【消息ID】@user_id@【发送者ID】@group_id@【判空@【群ID】@0】】】】】】【定义变量@微信AI清理结果@【微信AI清理上下文】】【判断@【取元素@【变量@微信AI清理结果】@status】@ok@【输出流@清理失败：【CQ转义@【取元素@【变量@微信AI清理结果】@message】】】@【输出流@已清理本会话中你的AI短期上下文。】】"
+    }
+  }
+]
